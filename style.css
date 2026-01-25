@@ -1,18 +1,8 @@
-body {
-  background: #111;
-  color: #eee;
-  font-family: Arial, sans-serif;
-  text-align: center;
-  padding: 40px;
-}
-
-h1 {
-  color: #00ff88;
-}
-
-button {
-  font-size: 16px;
-  padding: 10px 20px;
-  cursor: pointer;
-}
-
+body { font-family: Arial, sans-serif; background:#111; color:#eee; text-align:center; padding:28px; }
+h1 { color:#00ff88; margin-bottom:16px; }
+.card { background:#1e1e1e; padding:16px; margin:14px auto; border-radius:12px; max-width:520px; }
+button { padding:10px 14px; font-size:15px; cursor:pointer; }
+#status { margin-left:10px; color:#ffaa00; }
+.small { opacity:.8; font-size:12px; margin-top:8px; }
+.row { display:flex; gap:10px; justify-content:center; align-items:center; margin:8px 0; flex-wrap:wrap; }
+.name { font-family: monospace; }
