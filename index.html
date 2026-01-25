@@ -1,36 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>CYD Web Flasher</title>
-  <style>
-    body { font-family: Arial, sans-serif; background:#111; color:#eee; text-align:center; padding:40px; }
-    h1 { color:#00ff88; }
-    .card { background:#1e1e1e; padding:20px; border-radius:12px; max-width:520px; margin:20px auto; }
-    a { color:#6cf; }
-  </style>
-
-  <!-- ESP Web Tools -->
-  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <title>CYD GIF Manager</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>CYD / ESP32 Web Flasher</h1>
+  <h1>CYD GIF Manager</h1>
 
   <div class="card">
-    <p>Use Chrome or Edge. Plug in your ESP32, then click flash.</p>
-
-    <!-- This button reads manifest.json from your GitHub Pages site -->
-    <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
-
-    <p style="opacity:.8;margin-top:14px;">
-      If it can’t find your device, close Arduino Serial Monitor and unplug/replug the board.
-    </p>
+    <button id="connectBtn">Connect</button>
+    <span id="status">Not connected</span>
   </div>
 
   <div class="card">
-    <h2>Next: GIF uploader + selector</h2>
-    <p>After flashing, we’ll add a WebSerial “GIF Manager” that uploads to SD and lets you pick what plays.</p>
+    <h2>Upload GIF to SD</h2>
+    <input id="fileInput" type="file" accept=".gif,image/gif">
+    <button id="uploadBtn" disabled>Upload</button>
+    <div class="small" id="uploadStatus">—</div>
   </div>
+
+  <div class="card">
+    <h2>GIFs on SD</h2>
+    <button id="refreshBtn" disabled>Refresh List</button>
+    <div id="list"></div>
+  </div>
+
+  <script src="script.js"></script>
 </body>
 </html>
