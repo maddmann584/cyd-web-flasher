@@ -1,60 +1,66 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>CYD Firmware Installer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>CYD GIF Tool</title>
+  <link rel="stylesheet" href="style.css"/>
 
-  <!-- ESP Web Tools -->
-  <script
-    type="module"
-    src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js">
-  </script>
-
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #0f172a;
-      color: #e5e7eb;
-      text-align: center;
-      padding: 40px;
-    }
-    h1 {
-      color: #22d3ee;
-    }
-    .box {
-      max-width: 500px;
-      margin: auto;
-      background: #020617;
-      padding: 30px;
-      border-radius: 12px;
-      box-shadow: 0 0 30px rgba(0,0,0,0.6);
-    }
-    esp-web-install-button {
-      margin-top: 20px;
-    }
-    .note {
-      margin-top: 20px;
-      font-size: 0.9em;
-      color: #94a3b8;
-    }
-  </style>
+  <!-- ESP Web Tools (for flashing) -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
+  <header>
+    <h1>CYD / Freenove GIF Tool</h1>
+    <p class="sub">Flash firmware • Upload GIFs to SD • Pick what plays</p>
+  </header>
 
-  <div class="box">
-    <h1>CYD SD GIF Manager</h1>
-    <p>Flash firmware directly to your CYD ESP32 from the browser.</p>
+  <main>
+    <section class="card">
+      <h2>1) Flash firmware</h2>
+      <p>Use <b>Chrome</b> or <b>Edge</b>. Close Arduino Serial Monitor first.</p>
 
-    <esp-web-install-button manifest="manifest.json">
-      <button slot="activate">Install Firmware</button>
-    </esp-web-install-button>
+      <div class="row">
+        <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+      </div>
 
-    <p class="note">
-      ✔ Works in Chrome / Edge<br>
-      ✖ Not supported in Safari / Firefox
-    </p>
-  </div>
+      <p class="hint">
+        If it can’t detect the board: unplug/replug, try another cable, or hold BOOT while plugging in.
+      </p>
+    </section>
 
+    <section class="card">
+      <h2>2) Connect (after flashing)</h2>
+      <div class="row">
+        <button id="connectBtn">Connect</button>
+        <span id="status">Not connected</span>
+      </div>
+      <p class="hint">This talks to the firmware over WebSerial for LIST/UPLOAD/PLAY/DEL.</p>
+    </section>
+
+    <section class="card">
+      <h2>3) Upload GIF to SD</h2>
+      <div class="row">
+        <input id="fileInput" type="file" accept=".gif,image/gif"/>
+        <button id="uploadBtn" disabled>Upload</button>
+      </div>
+      <div id="uploadStatus" class="hint">—</div>
+      <p class="hint">Tip: start with small GIFs first (like under ~2–5 MB).</p>
+    </section>
+
+    <section class="card">
+      <h2>4) GIFs on SD</h2>
+      <div class="row">
+        <button id="refreshBtn" disabled>Refresh list</button>
+      </div>
+      <div id="list" class="list"></div>
+    </section>
+  </main>
+
+  <footer class="hint">
+    Works best on Windows + Chrome/Edge. iPhone Safari won’t work for WebSerial.
+  </footer>
+
+  <script src="app.js"></script>
 </body>
 </html>
