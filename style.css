@@ -1,8 +1,23 @@
-body { font-family: Arial, sans-serif; background:#111; color:#eee; text-align:center; padding:28px; }
-h1 { color:#00ff88; margin-bottom:16px; }
-.card { background:#1e1e1e; padding:16px; margin:14px auto; border-radius:12px; max-width:520px; }
-button { padding:10px 14px; font-size:15px; cursor:pointer; }
-#status { margin-left:10px; color:#ffaa00; }
-.small { opacity:.8; font-size:12px; margin-top:8px; }
-.row { display:flex; gap:10px; justify-content:center; align-items:center; margin:8px 0; flex-wrap:wrap; }
-.name { font-family: monospace; }
+:root { --bg:#0f0f10; --card:#1b1b1f; --text:#eaeaea; --muted:#a8a8b3; --good:#00ff88; --warn:#ffaa00; --bad:#ff4d4d; }
+* { box-sizing: border-box; }
+body { margin:0; font-family: Arial, sans-serif; background:var(--bg); color:var(--text); }
+header { text-align:center; padding:28px 16px 10px; }
+h1 { margin:0; color:var(--good); }
+.sub { margin:8px 0 0; color:var(--muted); }
+main { padding: 8px 14px 28px; max-width: 780px; margin: 0 auto; }
+.card { background:var(--card); border-radius:14px; padding:16px; margin:14px 0; }
+h2 { margin:0 0 10px; font-size:18px; }
+.row { display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; margin:10px 0; }
+button { padding:10px 14px; font-size:15px; cursor:pointer; border-radius:10px; border:0; background:#2b2b33; color:var(--text); }
+button:disabled { opacity:.5; cursor:not-allowed; }
+input[type="file"] { color:var(--muted); }
+#status { color:var(--warn); }
+.hint { color:var(--muted); font-size:12px; line-height:1.4; margin:8px 0 0; text-align:center; }
+.list { margin-top:12px; }
+.item { display:flex; gap:10px; align-items:center; justify-content:space-between; padding:10px; border-radius:12px; background:#24242a; margin:8px 0; flex-wrap:wrap; }
+.name { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+.meta { color:var(--muted); font-size:12px; }
+.actions { display:flex; gap:8px; }
+.play { background:#214733; }
+.del { background:#4a2020; }
+footer { text-align:center; padding: 0 12px 24px; }
