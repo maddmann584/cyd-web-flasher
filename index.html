@@ -1,65 +1,36 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>CYD GIF Tool</title>
+  <title>Maddmann’s GIF Player</title>
   <link rel="stylesheet" href="style.css"/>
-
-  <!-- ESP Web Tools (for flashing) -->
-  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
   <header>
-    <h1>CYD / Freenove GIF Tool</h1>
-    <p class="sub">Flash firmware • Upload GIFs to SD • Pick what plays</p>
+    <h1>Maddmann’s GIF Player</h1>
+    <p>Connect • Upload GIFs • Click to play</p>
   </header>
 
-  <main>
-    <section class="card">
-      <h2>1) Flash firmware</h2>
-      <p>Use <b>Chrome</b> or <b>Edge</b>. Close Arduino Serial Monitor first.</p>
+  <main class="card">
+    <div class="row">
+      <button id="connectBtn">Connect</button>
+      <span id="status">Not connected</span>
+    </div>
 
-      <div class="row">
-        <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
-      </div>
+    <div class="row">
+      <input id="fileInput" type="file" accept=".gif,image/gif"/>
+      <button id="uploadBtn" disabled>Upload to SD</button>
+      <button id="refreshBtn" disabled>Refresh</button>
+    </div>
 
-      <p class="hint">
-        If it can’t detect the board: unplug/replug, try another cable, or hold BOOT while plugging in.
-      </p>
-    </section>
+    <div id="uploadStatus" class="hint">Uploads go to /gifs</div>
 
-    <section class="card">
-      <h2>2) Connect (after flashing)</h2>
-      <div class="row">
-        <button id="connectBtn">Connect</button>
-        <span id="status">Not connected</span>
-      </div>
-      <p class="hint">This talks to the firmware over WebSerial for LIST/UPLOAD/PLAY/DEL.</p>
-    </section>
+    <h2>/gifs</h2>
+    <div id="list" class="list"></div>
 
-    <section class="card">
-      <h2>3) Upload GIF to SD</h2>
-      <div class="row">
-        <input id="fileInput" type="file" accept=".gif,image/gif"/>
-        <button id="uploadBtn" disabled>Upload</button>
-      </div>
-      <div id="uploadStatus" class="hint">—</div>
-      <p class="hint">Tip: start with small GIFs first (like under ~2–5 MB).</p>
-    </section>
-
-    <section class="card">
-      <h2>4) GIFs on SD</h2>
-      <div class="row">
-        <button id="refreshBtn" disabled>Refresh list</button>
-      </div>
-      <div id="list" class="list"></div>
-    </section>
+    <pre id="debug" class="debug">Debug:\n</pre>
   </main>
-
-  <footer class="hint">
-    Works best on Windows + Chrome/Edge. iPhone Safari won’t work for WebSerial.
-  </footer>
 
   <script src="app.js"></script>
 </body>
