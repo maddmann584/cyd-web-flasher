@@ -5,14 +5,26 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Maddmann’s GIF Player</title>
   <link rel="stylesheet" href="style.css"/>
+
+  <!-- ESP Web Tools (Flashing) -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
   <header>
     <h1>Maddmann’s GIF Player</h1>
-    <p>Connect • Upload GIFs • Click to play</p>
+    <p>Flash firmware • Connect • Upload • Click a GIF to play</p>
   </header>
 
   <main class="card">
+    <h2>1) Flash firmware</h2>
+    <p class="hint">Use Chrome/Edge. Close Arduino Serial Monitor first.</p>
+    <div class="row">
+      <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+    </div>
+
+    <hr class="sep"/>
+
+    <h2>2) Connect</h2>
     <div class="row">
       <button id="connectBtn">Connect</button>
       <span id="status">Not connected</span>
@@ -20,7 +32,7 @@
 
     <div class="row">
       <input id="fileInput" type="file" accept=".gif,image/gif"/>
-      <button id="uploadBtn" disabled>Upload to SD</button>
+      <button id="uploadBtn" disabled>Upload to /gifs</button>
       <button id="refreshBtn" disabled>Refresh</button>
     </div>
 
