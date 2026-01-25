@@ -1,0 +1,14 @@
+{
+  "name": "CYD GIF Player (SD)",
+  "version": "1.0.0",
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "firmware/bootloader.bin", "offset": 4096 },
+        { "path": "firmware/partitions.bin", "offset": 32768 },
+        { "path": "firmware/firmware.bin", "offset": 65536 }
+      ]
+    }
+  ]
+}
