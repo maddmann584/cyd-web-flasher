@@ -1,13 +1,15 @@
 {
-  "name": "CYD GIF Player (SD)",
+  "name": "CYD SD GIF Manager",
   "version": "1.0.0",
+  "new_install_prompt_erase": true,
   "builds": [
     {
       "chipFamily": "ESP32",
       "parts": [
-        { "path": "firmware/bootloader.bin", "offset": 4096 },
-        { "path": "firmware/partitions.bin", "offset": 32768 },
-        { "path": "firmware/firmware.bin", "offset": 65536 }
+        {
+          "path": "firmware/cyd_sd_gif_manager.bin",
+          "offset": 0
+        }
       ]
     }
   ]
