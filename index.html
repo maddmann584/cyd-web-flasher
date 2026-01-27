@@ -22,6 +22,7 @@
     <h2>2) Connect</h2>
     <div class="row">
       <button id="connectBtn">Connect</button>
+      <button id="reloadBtn" disabled>Reload</button>
       <span id="status">Not connected</span>
     </div>
 
@@ -30,6 +31,10 @@
     <div class="row">
       <input id="fileInput" type="file" accept=".gif,image/gif"/>
       <button id="uploadBtn" disabled>Upload</button>
+    </div>
+
+    <div class="progressWrap">
+      <div class="progressBar" id="progressBar"></div>
     </div>
     <div id="uploadStatus" class="hint">Connect to load your GIFs</div>
 
