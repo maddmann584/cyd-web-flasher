@@ -1,22 +1,62 @@
-.dropzone{
-  border: 2px dashed #3a3a44;
-  border-radius: 14px;
-  padding: 22px;
-  text-align: center;
-  background: #16161a;
-  margin: 10px 0 14px;
-  user-select: none;
+body { background:#0f0f10; color:#eaeaea; font-family:Arial, sans-serif; margin:0; }
+header { text-align:center; padding:22px 12px; }
+h1 { margin:0; color:#00ff88; }
+p { margin:8px 0 0; color:#a8a8b3; }
+
+.card {
+  width: min(900px, calc(100% - 24px));
+  margin: 0 auto 24px;
+  background:#1b1b1f;
+  padding:16px;
+  border-radius:14px;
+  position: relative;
 }
-.dropzone.dragover{
-  border-color:#00ff88;
-  background:#122019;
+
+.row {
+  display:flex;
+  gap:10px;
+  justify-content:center;
+  align-items:center;
+  flex-wrap:wrap;
+  margin:10px 0;
 }
-.dropTitle{ font-size:16px; color:#eaeaea; }
-.dropSub{ font-size:12px; color:#a8a8b3; margin-top:6px; }
-select{
-  padding:10px 12px;
-  border-radius:10px;
-  border:1px solid #2a2a33;
-  background:#101014;
-  color:#eaeaea;
+
+button { padding:10px 14px; border-radius:10px; border:0; background:#2b2b33; color:#eaeaea; cursor:pointer; }
+button:disabled { opacity:.5; cursor:not-allowed; }
+#status { color:#ffaa00; }
+.hint { text-align:center; color:#a8a8b3; font-size:12px; }
+
+.sep { border:0; height:1px; background:#2a2a33; margin:14px 0; }
+
+.list { margin-top:10px; }
+.item {
+  display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;
+  background:#24242a; padding:10px; border-radius:12px; margin:8px 0;
 }
+.name { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.meta { color:#a8a8b3; font-size:12px; }
+.actions { display:flex; gap:8px; }
+.play { background:#214733; }
+.del { background:#4a2020; }
+
+.debug {
+  margin-top:12px; background:#101014; border:1px solid #2a2a33; border-radius:12px;
+  padding:10px; max-height:220px; overflow:auto; white-space:pre-wrap;
+}
+
+/* Drag overlay (doesn't change normal look) */
+.dropOverlay{
+  position:absolute;
+  inset:10px;
+  border-radius:14px;
+  border:2px dashed #00ff88;
+  background: rgba(0,0,0,0.55);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:#00ff88;
+  font-weight:700;
+  text-align:center;
+  padding:18px;
+}
+.hidden{ display:none; }
