@@ -1,10 +1,8 @@
-// GIF Player — app.js (FULL WORKING)
-// Matches your firmware: LIST / UPLOAD2 / PLAY / DEL / GET
-// - No refresh button (auto refresh on connect + after upload + after flash done)
-// - Drag overlay ONLY while dragging over card (never stuck)
-// - Real GIF previews using GET (SIZE n + raw bytes)
-// - No duplicates (dedupe + cancel stale renders)
-// - Upload works (UPLOAD2 + chunk ACK)
+// GIF Player — app.js (NO DRAG/DROP)
+// ✅ Auto refresh after Connect and after Upload
+// ✅ Real GIF previews (GET -> SIZE n -> bytes)
+// ✅ No duplicates (dedupe + cancel stale refresh)
+// ✅ Upload enabled only when connected + file chosen
 
 const connectBtn   = document.getElementById("connectBtn");
 const statusEl     = document.getElementById("status");
@@ -13,13 +11,12 @@ const uploadBtn    = document.getElementById("uploadBtn");
 const uploadStatus = document.getElementById("uploadStatus");
 const gridEl       = document.getElementById("grid");
 const errorBox     = document.getElementById("errorBox");
-const dropOverlay  = document.getElementById("dropOverlay");
-const card         = document.getElementById("card");
 const flashBtn     = document.getElementById("flashBtn");
 
 let port=null, reader=null, writer=null;
+let connected = false;
 
-// Raw byte buffer for BOTH text lines and binary GET (previews)
+// raw byte buffer (required for GET previews)
 let rx = new Uint8Array(0);
 const dec = new TextDecoder();
 const enc = new TextEncoder();
@@ -29,7 +26,6 @@ function concatBytes(a,b){
   out.set(a,0); out.set(b,a.length);
   return out;
 }
-
 async function pump(timeoutMs=15000){
   const start = Date.now();
   while(true){
@@ -42,16 +38,15 @@ async function pump(timeoutMs=15000){
     }
   }
 }
-
 async function readLine(timeoutMs=15000){
   const start = Date.now();
   while(true){
-    const nl = rx.indexOf(0x0A); // '\n'
+    const nl = rx.indexOf(0x0A);
     if(nl >= 0){
       let lineBytes = rx.slice(0, nl);
       rx = rx.slice(nl + 1);
       if(lineBytes.length && lineBytes[lineBytes.length-1] === 0x0D){
-        lineBytes = lineBytes.slice(0, -1); // trim '\r'
+        lineBytes = lineBytes.slice(0, -1);
       }
       return dec.decode(lineBytes).trim();
     }
@@ -59,7 +54,6 @@ async function readLine(timeoutMs=15000){
     await pump(timeoutMs);
   }
 }
-
 async function readBytesExact(n, timeoutMs=60000){
   const start = Date.now();
   while(rx.length < n){
@@ -70,12 +64,11 @@ async function readBytesExact(n, timeoutMs=60000){
   rx = rx.slice(n);
   return out;
 }
-
 async function writeText(s){
   await writer.write(enc.encode(s));
 }
 
-// ---------- UI ----------
+// UI
 function showError(msg){
   errorBox.textContent = msg;
   errorBox.classList.remove("hidden");
@@ -92,16 +85,17 @@ function setUpload(msg, kind="muted"){
   uploadStatus.textContent = msg;
   uploadStatus.style.color = kind==="good" ? "#00ff88" : kind==="bad" ? "#ff4d4d" : "#a8a8b3";
 }
-function disableUpload(disabled){
-  uploadBtn.disabled = disabled;
-}
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
 
-// ---------- previews ----------
-const previewURLs = new Map(); // name -> objectURL
+function updateUploadEnabled(){
+  uploadBtn.disabled = !(connected && fileInput.files && fileInput.files[0]);
+}
+
+// Preview cache
+const previewURLs = new Map();
 function setThumb(thumbEl, name, blob){
   if(previewURLs.has(name)){
     try{ URL.revokeObjectURL(previewURLs.get(name)); }catch{}
@@ -111,47 +105,10 @@ function setThumb(thumbEl, name, blob){
   thumbEl.innerHTML = `<img alt="${escapeAttr(name)}" src="${url}">`;
 }
 
-// ---------- Connect ----------
-async function connect(){
-  clearError();
-
-  if(!("serial" in navigator)){
-    showError("WebSerial not supported. Use Chrome or Edge.");
-    return;
-  }
-  if(!(location.protocol === "https:" || location.hostname === "localhost")){
-    showError("This site must be HTTPS (or localhost) for WebSerial to work.");
-    return;
-  }
-
-  try{
-    setStatus("Connecting…");
-    port = await navigator.serial.requestPort(); // chooser pops here
-    await port.open({ baudRate: 115200 });
-
-    writer = port.writable.getWriter();
-    reader = port.readable.getReader();
-    rx = new Uint8Array(0);
-
-    setStatus("Connected ✅", true);
-    disableUpload(false);
-    setUpload("Connected. Drop or choose a GIF, then Upload.");
-
-    // optional HELLO line
-    try { await readLine(800); } catch {}
-
-    await refreshList(); // auto refresh
-  } catch(e){
-    setStatus("Not connected");
-    showError("Connect failed: " + (e?.message || String(e)));
-  }
-}
-
-// ---------- Firmware commands ----------
+// Commands
 async function cmdLIST(){
   await writeText("LIST\n");
-
-  const map = new Map(); // dedupe
+  const map = new Map();
   while(true){
     const line = await readLine(15000);
     if(line === "BEGIN") continue;
@@ -172,26 +129,22 @@ async function cmdPLAY(name){
   const resp = await readLine(15000);
   if(resp !== "OK") throw new Error(resp);
 }
-
 async function cmdDEL(name){
   await writeText(`DEL ${name}\n`);
   const resp = await readLine(15000);
   if(resp !== "OK") throw new Error(resp);
 }
-
 async function cmdGET(name){
   await writeText(`GET ${name}\n`);
   const header = await readLine(15000);
   if(!header.startsWith("SIZE ")) throw new Error(header);
-
   const n = parseInt(header.slice(5), 10);
   if(!Number.isFinite(n) || n <= 0) throw new Error("Bad SIZE: " + header);
-
   const bytes = await readBytesExact(n, 60000);
   return new Blob([bytes], { type: "image/gif" });
 }
 
-// ---------- Grid + auto refresh control ----------
+// Grid refresh (auto + no duplicates)
 let refreshToken = 0;
 
 async function refreshList(){
@@ -258,7 +211,6 @@ async function refreshList(){
           try{ URL.revokeObjectURL(previewURLs.get(f.name)); }catch{}
           previewURLs.delete(f.name);
         }
-
         setUpload("Deleted.", "good");
         await refreshList();
       } catch(e){
@@ -271,7 +223,7 @@ async function refreshList(){
     item.appendChild(meta);
     gridEl.appendChild(item);
 
-    // Preview load (GET)
+    // Preview load
     (async ()=>{
       try{
         if(token !== refreshToken) return;
@@ -283,9 +235,8 @@ async function refreshList(){
 
         const blob = await cmdGET(f.name);
         if(token !== refreshToken) return;
-
         setThumb(thumb, f.name, blob);
-      } catch{
+      } catch {
         thumb.innerHTML = `<div class="ph">No preview</div>`;
       }
     })();
@@ -294,12 +245,11 @@ async function refreshList(){
   setUpload(`Loaded ${files.length} GIF(s).`);
 }
 
-// ---------- Upload ----------
+// Upload
 async function uploadFlow(){
   clearError();
   const file = fileInput.files?.[0];
   if(!file){ setUpload("Pick a GIF first", "bad"); return; }
-  if(!/\.gif$/i.test(file.name)){ setUpload("Choose a .gif file", "bad"); return; }
 
   const safeName = file.name.replace(/[^\w.\-]/g,"_");
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -339,62 +289,67 @@ async function uploadFlow(){
   }
 }
 
-// ---------- Drag overlay (only while dragging over card) ----------
-let dragDepth = 0;
-function showDrop(){ dropOverlay.classList.remove("hidden"); }
-function hideDrop(){ dropOverlay.classList.add("hidden"); dragDepth = 0; }
-hideDrop(); // ensure hidden on load
+// Connect
+async function connect(){
+  clearError();
 
-card.addEventListener("dragenter", (e)=>{
-  e.preventDefault();
-  dragDepth++;
-  showDrop();
-});
-card.addEventListener("dragover", (e)=>{
-  e.preventDefault();
-  showDrop();
-});
-card.addEventListener("dragleave", (e)=>{
-  e.preventDefault();
-  dragDepth--;
-  if(dragDepth <= 0) hideDrop();
-});
-card.addEventListener("drop", (e)=>{
-  e.preventDefault();
-  hideDrop();
+  if(!("serial" in navigator)){
+    showError("WebSerial not supported. Use Chrome or Edge.");
+    return;
+  }
+  if(!(location.protocol === "https:" || location.hostname === "localhost")){
+    showError("This site must be HTTPS (or localhost) for WebSerial to work.");
+    return;
+  }
 
-  const files = Array.from(e.dataTransfer?.files || []);
-  const gif = files.find(f => /\.gif$/i.test(f.name));
-  if(!gif){ setUpload("Drop a .gif file", "bad"); return; }
+  try{
+    setStatus("Connecting…");
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
 
-  const dt = new DataTransfer();
-  dt.items.add(gif);
-  fileInput.files = dt.files;
+    writer = port.writable.getWriter();
+    reader = port.readable.getReader();
+    rx = new Uint8Array(0);
 
-  setUpload(`Dropped: ${gif.name} (ready). Click Upload.`, "muted");
-});
+    connected = true;
+    setStatus("Connected ✅", true);
+    setUpload("Connected. Choose a GIF, then Upload.");
+    updateUploadEnabled();
 
-// ---------- Auto refresh after flashing ----------
+    // optional HELLO
+    try { await readLine(800); } catch {}
+
+    await refreshList(); // auto refresh after connect
+  } catch(e){
+    connected = false;
+    setStatus("Not connected");
+    updateUploadEnabled();
+    showError("Connect failed: " + (e?.message || String(e)));
+  }
+}
+
+// Auto refresh after flashing (optional)
 if(flashBtn){
-  // ESP Web Tools fires "state-changed" events; when it says "done", refresh list if connected
   flashBtn.addEventListener("state-changed", async (ev)=>{
-    const st = ev?.detail?.state || "";
-    if(String(st).toLowerCase() === "done"){
-      // give device a moment to reboot
-      setUpload("Flashed. Reconnect, then it will load GIFs.", "muted");
+    const st = String(ev?.detail?.state || "").toLowerCase();
+    if(st === "done"){
+      setUpload("Flashed. Reconnect to load GIFs.", "muted");
       // if already connected, try refresh after reboot delay
       try{
         await new Promise(r=>setTimeout(r, 2500));
-        if(writer && reader) await refreshList();
+        if(connected) await refreshList();
       } catch {}
     }
   });
 }
 
-// ---------- Buttons ----------
-disableUpload(true);
-setStatus("Not connected");
-setUpload("Connect to start.");
-
+// Events
 connectBtn.onclick = async ()=>{ await connect(); };
 uploadBtn.onclick  = async ()=>{ await uploadFlow(); };
+fileInput.onchange = ()=>{ updateUploadEnabled(); };
+
+// Init
+connected = false;
+setStatus("Not connected");
+setUpload("Connect to start.");
+updateUploadEnabled();
