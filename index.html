@@ -6,13 +6,12 @@
   <title>GIF Player</title>
   <link rel="stylesheet" href="style.css"/>
 
-  <!-- ESP Web Tools -->
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
   <header>
     <h1>GIF Player</h1>
-    <p>Flash firmware • Connect • Drag & drop a GIF • Upload • Tap to play</p>
+    <p>Flash firmware • Connect • Upload • Tap to play</p>
   </header>
 
   <main class="card" id="card">
@@ -44,7 +43,7 @@
         <button id="uploadBtn" class="btn" disabled>Upload</button>
       </div>
 
-      <div id="uploadStatus" class="hint">Drop a GIF onto this card to select it.</div>
+      <div id="uploadStatus" class="hint">Choose a GIF, then Upload.</div>
       <div id="errorBox" class="error hidden"></div>
     </section>
 
@@ -58,11 +57,6 @@
 
       <div id="grid" class="grid"></div>
     </section>
-
-    <!-- Drag overlay -->
-    <div id="dropOverlay" class="dropOverlay hidden">
-      Drop GIF to upload
-    </div>
   </main>
 
   <script src="app.js"></script>
