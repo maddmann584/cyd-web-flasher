@@ -6,55 +6,49 @@
   <title>GIF Player</title>
   <link rel="stylesheet" href="style.css"/>
 
+  <!-- ESP Web Tools -->
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
-  <header>
-    <h1>GIF Player</h1>
-    <p>Flash firmware • Connect • Upload • Tap to play</p>
+  <header class="top">
+    <div class="brand">
+      <div class="logo">GIF</div>
+      <div>
+        <h1>GIF Player</h1>
+        <div class="sub">Flash • Connect • Upload • Tap a GIF</div>
+      </div>
+    </div>
   </header>
 
-  <main class="card" id="card">
-    <section class="block">
-      <div class="row between">
-        <div>
-          <h2>Flash</h2>
-          <div class="hint">Chrome/Edge • HTTPS (or localhost) • Close Arduino Serial Monitor first</div>
-        </div>
-        <div class="flashWrap">
-          <esp-web-install-button id="flashBtn" manifest="manifest.json"></esp-web-install-button>
-        </div>
+  <main class="wrap">
+    <section class="panel">
+      <h2>Flash firmware</h2>
+      <div class="row">
+        <esp-web-install-button id="flashBtn" manifest="manifest.json"></esp-web-install-button>
       </div>
+      <div class="hint">Use Chrome/Edge. Close Arduino Serial Monitor first.</div>
     </section>
 
-    <div class="divider"></div>
-
-    <section class="block">
-      <div class="row between">
-        <div>
-          <h2>Connect</h2>
-          <div id="status" class="status">Not connected</div>
-        </div>
-        <button id="connectBtn" class="btn primary">Connect</button>
+    <section class="panel">
+      <div class="row rowSpace">
+        <button id="connectBtn" class="primary">Connect</button>
+        <div id="status" class="status">Not connected</div>
       </div>
 
-      <div class="row wrap">
-        <input id="fileInput" class="file" type="file" accept=".gif,image/gif"/>
-        <button id="uploadBtn" class="btn" disabled>Upload</button>
-      </div>
-
-      <div id="uploadStatus" class="hint">Choose a GIF, then Upload.</div>
       <div id="errorBox" class="error hidden"></div>
+
+      <div class="row">
+        <input id="fileInput" type="file" accept=".gif,image/gif"/>
+        <button id="uploadBtn" class="primary" disabled>Upload</button>
+      </div>
+      <div id="uploadStatus" class="hint">Connect to load your GIFs</div>
     </section>
 
-    <div class="divider"></div>
-
-    <section class="block">
-      <div class="row between">
-        <h2>Your GIFs</h2>
-        <div class="pill">Scroll when full</div>
+    <section class="panel">
+      <div class="row rowSpace">
+        <h2 style="margin:0">Your GIFs</h2>
+        <button id="reloadBtn" class="ghost" title="Reload list">Reload</button>
       </div>
-
       <div id="grid" class="grid"></div>
     </section>
   </main>
