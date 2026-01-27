@@ -4,31 +4,37 @@ const fileInput  = document.getElementById("fileInput");
 const uploadBtn  = document.getElementById("uploadBtn");
 const refreshBtn = document.getElementById("refreshBtn");
 const uploadStatus = document.getElementById("uploadStatus");
-const listEl = document.getElementById("list");
-const debugEl = document.getElementById("debug");
-
-const card = document.getElementById("card");
+const gridEl = document.getElementById("grid");
+const errorBox = document.getElementById("errorBox");
 const dropOverlay = document.getElementById("dropOverlay");
+const card = document.getElementById("card");
 
 let port=null, reader=null, writer=null;
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 let rxBuf = "";
 
-const TARGET_W = 240;   // ✅ your screen
-const TARGET_H = 320;   // ✅ your screen
+// Your screen size (portrait)
+const TARGET_W = 240;
+const TARGET_H = 320;
 const FIT_MODE = "contain"; // contain | cover | stretch
 
-function log(msg){
-  debugEl.textContent += msg + "\n";
-  debugEl.scrollTop = debugEl.scrollHeight;
-  console.log(msg);
+// Cache thumbnails for uploaded gifs (browser-side)
+const THUMB_DB = "maddmann_gif_thumbs_v1";
+
+function showError(msg){
+  errorBox.textContent = msg;
+  errorBox.classList.remove("hidden");
 }
-function setStatus(msg, kind="warn"){
+function clearError(){
+  errorBox.classList.add("hidden");
+  errorBox.textContent = "";
+}
+function setStatus(msg, ok=false){
   statusEl.textContent = msg;
-  statusEl.style.color = kind==="good" ? "#00ff88" : kind==="bad" ? "#ff4d4d" : "#ffaa00";
+  statusEl.style.color = ok ? "#00ff88" : "#a8a8b3"; // no orange
 }
-function setUpload(msg, kind="warn"){
+function setUpload(msg, kind="muted"){
   uploadStatus.textContent = msg;
   uploadStatus.style.color = kind==="good" ? "#00ff88" : kind==="bad" ? "#ff4d4d" : "#a8a8b3";
 }
@@ -60,43 +66,96 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
+function safeName(name){ return String(name).replace(/[^\w.\-]/g,"_"); }
 
-async function connect(){
-  if(!("serial" in navigator)) throw new Error("WebSerial not supported. Use Chrome/Edge.");
-
-  log("Requesting port...");
-  port = await navigator.serial.requestPort();
-
-  log("Opening @115200...");
-  await port.open({baudRate:115200});
-
-  writer = port.writable.getWriter();
-  reader = port.readable.getReader();
-  rxBuf = "";
-
-  setStatus("Connected ✅","good");
-  disableUI(false);
-
-  // Optional hello line
-  try {
-    const hello = await readLine(1500);
-    log("RX: " + hello);
-  } catch {
-    log("No HELLO line (ok).");
-  }
-
-  await refreshList();
+// --- IndexedDB (thumbnail cache) ---
+function idbOpen(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(THUMB_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      db.createObjectStore("thumbs");
+    };
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror = ()=>reject(req.error);
+  });
+}
+async function idbSet(key, blob){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction("thumbs","readwrite");
+    tx.objectStore("thumbs").put(blob, key);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = ()=>reject(tx.error);
+  });
+}
+async function idbGet(key){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction("thumbs","readonly");
+    const req = tx.objectStore("thumbs").get(key);
+    req.onsuccess = ()=>resolve(req.result || null);
+    req.onerror = ()=>reject(req.error);
+  });
+}
+async function idbDel(key){
+  const db = await idbOpen();
+  return new Promise((resolve, reject)=>{
+    const tx = db.transaction("thumbs","readwrite");
+    tx.objectStore("thumbs").delete(key);
+    tx.oncomplete = ()=>resolve();
+    tx.onerror = ()=>reject(tx.error);
+  });
 }
 
+// --- Connect ---
+async function connect(){
+  clearError();
+
+  // WebSerial requirements
+  if(!("serial" in navigator)){
+    showError("WebSerial not supported. Use Chrome or Edge.");
+    return;
+  }
+  if(!(location.protocol === "https:" || location.hostname === "localhost")){
+    showError("WebSerial requires HTTPS (or localhost). Host this site on HTTPS (GitHub Pages / Netlify).");
+    return;
+  }
+
+  try{
+    setStatus("Opening port…");
+    // MUST be called inside a click handler
+    port = await navigator.serial.requestPort();
+    await port.open({baudRate:115200});
+
+    writer = port.writable.getWriter();
+    reader = port.readable.getReader();
+    rxBuf = "";
+
+    setStatus("Connected ✅", true);
+    disableUI(false);
+    setUpload("Connected. Pick or drop a GIF, then Upload.");
+
+    // read optional HELLO without failing connect
+    try { await readLine(800); } catch {}
+
+    await refreshList();
+  } catch(e){
+    showError("Connect failed: " + (e?.message || String(e)));
+    setStatus("Not connected");
+  }
+}
+
+// --- List/Play/Delete ---
 async function refreshList(){
-  listEl.innerHTML = "";
-  log("TX: LIST");
+  clearError();
+  gridEl.innerHTML = "";
+
   await writeText("LIST\n");
 
   const files = [];
   while(true){
     const line = await readLine();
-    log("RX: " + line);
     if(line === "BEGIN") continue;
     if(line === "END") break;
     if(line.startsWith("FILE ")){
@@ -106,52 +165,70 @@ async function refreshList(){
   }
 
   if(files.length === 0){
-    listEl.innerHTML = `<div class="hint">No GIFs in /gifs</div>`;
+    gridEl.innerHTML = `<div class="hint">No GIFs yet — upload one!</div>`;
     return;
   }
 
   for(const f of files){
-    const row = document.createElement("div");
-    row.className = "item";
-    row.innerHTML = `
-      <div>
-        <div class="name">${escapeHtml(f.name)}</div>
-        <div class="meta">${escapeHtml(f.size)} bytes</div>
-      </div>
+    const card = document.createElement("div");
+    card.className = "cardItem";
+
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.innerHTML = `<div class="ph">No preview<br>(upload from this site to cache thumbnails)</div>`;
+
+    // Try to load cached thumbnail blob
+    try{
+      const blob = await idbGet(f.name);
+      if(blob){
+        const url = URL.createObjectURL(blob);
+        thumb.innerHTML = `<img alt="${escapeAttr(f.name)}" src="${url}">`;
+      }
+    } catch {}
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `
+      <div class="name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
       <div class="actions">
-        <button class="play" data-play="${escapeAttr(f.name)}">Play</button>
-        <button class="del" data-del="${escapeAttr(f.name)}">Delete</button>
+        <button class="btn play">Play</button>
+        <button class="btn del">Delete</button>
       </div>
     `;
-    listEl.appendChild(row);
+
+    meta.querySelector(".play").onclick = async ()=>{
+      clearError();
+      try{
+        await writeText(`PLAY ${f.name}\n`);
+        const resp = await readLine();
+        if(resp !== "OK") throw new Error(resp);
+        setUpload(`Playing: ${f.name}`, "good");
+      } catch(e){
+        showError("Play failed: " + (e?.message || String(e)));
+      }
+    };
+
+    meta.querySelector(".del").onclick = async ()=>{
+      if(!confirm(`Delete ${f.name}?`)) return;
+      clearError();
+      try{
+        await writeText(`DEL ${f.name}\n`);
+        const resp = await readLine();
+        if(resp !== "OK") throw new Error(resp);
+        await idbDel(f.name).catch(()=>{});
+        await refreshList();
+      } catch(e){
+        showError("Delete failed: " + (e?.message || String(e)));
+      }
+    };
+
+    card.appendChild(thumb);
+    card.appendChild(meta);
+    gridEl.appendChild(card);
   }
-
-  listEl.querySelectorAll("[data-play]").forEach(btn=>{
-    btn.onclick = async ()=>{
-      const name = btn.getAttribute("data-play");
-      log("TX: PLAY " + name);
-      await writeText(`PLAY ${name}\n`);
-      const resp = await readLine();
-      log("RX: " + resp);
-      if(resp !== "OK") alert("Play failed: " + resp);
-    };
-  });
-
-  listEl.querySelectorAll("[data-del]").forEach(btn=>{
-    btn.onclick = async ()=>{
-      const name = btn.getAttribute("data-del");
-      if(!confirm(`Delete ${name}?`)) return;
-      log("TX: DEL " + name);
-      await writeText(`DEL ${name}\n`);
-      const resp = await readLine();
-      log("RX: " + resp);
-      if(resp === "OK") await refreshList();
-      else alert("Delete failed: " + resp);
-    };
-  });
 }
 
-// ---------- Resize GIF to screen ----------
+// --- GIF resize ---
 function drawFit(ctx, img, tw, th, mode){
   const iw = img.width, ih = img.height;
   ctx.clearRect(0,0,tw,th);
@@ -160,7 +237,6 @@ function drawFit(ctx, img, tw, th, mode){
     ctx.drawImage(img, 0,0,tw,th);
     return;
   }
-
   const scaleContain = Math.min(tw/iw, th/ih);
   const scaleCover   = Math.max(tw/iw, th/ih);
   const s = (mode === "cover") ? scaleCover : scaleContain;
@@ -173,7 +249,7 @@ function drawFit(ctx, img, tw, th, mode){
   ctx.drawImage(img, dx, dy, dw, dh);
 }
 
-async function resizeGifTo240x320(file){
+async function resizeGif(file){
   const buf = await file.arrayBuffer();
   const gifObj = window.gifuct.parseGIF(buf);
   const frames = window.gifuct.decompressFrames(gifObj, true);
@@ -203,12 +279,11 @@ async function resizeGifTo240x320(file){
 
     drawFit(outCtx, srcCanvas, TARGET_W, TARGET_H, FIT_MODE);
 
-    // gifuct delay is usually in 1/100 seconds
+    // delay in ms: gifuct usually gives 1/100s
     let delayMs = fr.delay != null ? fr.delay * 10 : 60;
     if(delayMs < 10) delayMs = 10;
     if(delayMs > 200) delayMs = 200;
-
-    encoder.addFrame(outCtx, { copy: true, delay: delayMs });
+    encoder.addFrame(outCtx, { copy:true, delay: delayMs });
   }
 
   const outBlob = await new Promise((resolve, reject)=>{
@@ -217,21 +292,19 @@ async function resizeGifTo240x320(file){
     encoder.render();
   });
 
-  const base = file.name.replace(/\.gif$/i,"").replace(/[^\w.\-]/g,"_");
-  const newName = `${base}_${TARGET_W}x${TARGET_H}.gif`;
-  return { blob: outBlob, name: newName };
+  const base = safeName(file.name.replace(/\.gif$/i,""));
+  const outName = `${base}_${TARGET_W}x${TARGET_H}.gif`;
+  return { blob: outBlob, name: outName };
 }
 
-// ---------- Upload (uses your firmware protocol) ----------
+// --- Upload using your ESP protocol ---
 async function uploadBytes(name, bytes){
-  setUpload(`Sending header… (${bytes.length} bytes)`);
-  log(`TX: UPLOAD2 ${name} ${bytes.length}`);
   await writeText(`UPLOAD2 ${name} ${bytes.length}\n`);
 
   const ready = await readLine(15000);
-  log("RX: " + ready);
   if(ready !== "READY") throw new Error("Device refused: " + ready);
 
+  // small delay helps stability
   await new Promise(r=>setTimeout(r, 20));
 
   const CHUNK = 1024;
@@ -244,76 +317,75 @@ async function uploadBytes(name, bytes){
     sent += len;
 
     const ack = await readLine(15000);
-    log("RX: " + ack);
     if(!ack.startsWith("ACK ")) throw new Error("Upload failed: " + ack);
 
     setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
   }
 
   const done = await readLine(15000);
-  log("RX: " + done);
   if(done !== "OK") throw new Error("Upload failed: " + done);
 }
 
-async function uploadReliable(){
+async function uploadFlow(){
+  clearError();
   const file = fileInput.files?.[0];
-  if(!file){ setUpload("Pick a GIF first","bad"); return; }
+  if(!file){ setUpload("Pick a GIF first", "bad"); return; }
+  if(!/\.gif$/i.test(file.name)){ setUpload("Choose a .gif file", "bad"); return; }
 
-  setUpload(`Resizing to ${TARGET_W}x${TARGET_H}…`);
-  log("Resizing: " + file.name);
+  setUpload(`Resizing to ${TARGET_W}×${TARGET_H}…`);
+  const { blob, name } = await resizeGif(file);
 
-  const { blob, name } = await resizeGifTo240x320(file);
+  // cache thumbnail for grid preview (same gif blob)
+  await idbSet(name, blob).catch(()=>{});
+
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  const safeName = name.replace(/[^\w.\-]/g,"_");
+  setUpload(`Uploading ${name}…`);
 
-  setUpload(`Uploading ${safeName}…`);
-  await uploadBytes(safeName, bytes);
+  await uploadBytes(name, bytes);
 
-  setUpload("Upload complete ✅","good");
+  setUpload(`Upload complete ✅ (${name})`, "good");
   await refreshList();
 }
 
-// ---------- Drag & drop (keeps old UI) ----------
-function setDroppedFile(file){
+// --- Drag & drop (does NOT block clicks) ---
+function setDropped(file){
   const dt = new DataTransfer();
   dt.items.add(file);
   fileInput.files = dt.files;
-  setUpload(`Dropped: ${file.name} (ready). Click Upload to /gifs`);
+  setUpload(`Dropped: ${file.name} (ready). Click Upload.`, "muted");
 }
 
-document.addEventListener("dragover", (e)=>{
+card.addEventListener("dragover", (e)=>{
   e.preventDefault();
-  if(dropOverlay) dropOverlay.classList.remove("hidden");
+  dropOverlay.classList.remove("hidden");
 });
-document.addEventListener("dragleave", ()=>{
-  if(dropOverlay) dropOverlay.classList.add("hidden");
+card.addEventListener("dragleave", ()=>{
+  dropOverlay.classList.add("hidden");
 });
-document.addEventListener("drop", (e)=>{
+card.addEventListener("drop", (e)=>{
   e.preventDefault();
-  if(dropOverlay) dropOverlay.classList.add("hidden");
-
+  dropOverlay.classList.add("hidden");
   const files = Array.from(e.dataTransfer?.files || []);
   const gif = files.find(f => /\.gif$/i.test(f.name));
-  if(!gif){ setUpload("Drop a .gif file","bad"); return; }
-  setDroppedFile(gif);
+  if(!gif){ setUpload("Drop a .gif file", "bad"); return; }
+  setDropped(gif);
 });
 
-// ---------- UI wiring ----------
+// --- Buttons ---
 disableUI(true);
-setStatus("Not connected","warn");
-setUpload("Uploads go to /gifs");
+setStatus("Not connected");
+setUpload("Uploads go to your SD card");
 
 connectBtn.onclick = async ()=>{
-  try { await connect(); }
-  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setStatus("Connect failed","bad"); }
+  await connect();
 };
 
 refreshBtn.onclick = async ()=>{
   try { await refreshList(); }
-  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); alert(e.message||String(e)); }
+  catch(e){ showError("Refresh failed: " + (e?.message || String(e))); }
 };
 
 uploadBtn.onclick = async ()=>{
-  try { await uploadReliable(); }
-  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
+  try { await uploadFlow(); }
+  catch(e){ showError(e?.message || String(e)); setUpload("Upload failed", "bad"); }
 };
