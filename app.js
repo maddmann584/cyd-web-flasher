@@ -1,6 +1,5 @@
-// GIF Player — app.js (SERIAL QUEUE FIX)
-// Matches firmware: LIST / UPLOAD2 / PLAY / DEL / GET
-// Fixes: No list, no upload, broken previews (caused by parallel serial reads)
+// GIF Player — app.js (FIXED LIST ON CONNECT + RELIABLE UPLOAD + PREVIEWS)
+// Works with your firmware: LIST / UPLOAD2 / PLAY / DEL / GET
 
 const connectBtn   = document.getElementById("connectBtn");
 const statusEl     = document.getElementById("status");
@@ -9,12 +8,11 @@ const uploadBtn    = document.getElementById("uploadBtn");
 const uploadStatus = document.getElementById("uploadStatus");
 const gridEl       = document.getElementById("grid");
 const errorBox     = document.getElementById("errorBox");
-const flashBtn     = document.getElementById("flashBtn");
 
 let port=null, reader=null, writer=null;
 let connected = false;
 
-// raw byte buffer (must be shared for lines + binary)
+// shared RX buffer for text + binary
 let rx = new Uint8Array(0);
 const dec = new TextDecoder();
 const enc = new TextEncoder();
@@ -43,6 +41,7 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
+const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
 
 // ---------- Serial helpers ----------
 function concatBytes(a,b){
@@ -92,11 +91,9 @@ async function writeText(s){
   await writer.write(enc.encode(s));
 }
 
-// ---------- CRITICAL: SERIAL QUEUE (one command at a time) ----------
+// ---------- SERIAL QUEUE (prevents overlap) ----------
 let serialBusy = Promise.resolve();
-
 function withSerialLock(fn){
-  // queue every serial transaction so LIST/GET/UPLOAD never overlap
   const run = async () => await fn();
   const p = serialBusy.then(run, run);
   serialBusy = p.catch(()=>{});
@@ -104,7 +101,7 @@ function withSerialLock(fn){
 }
 
 // ---------- Preview cache ----------
-const previewURLs = new Map(); // name -> objectURL
+const previewURLs = new Map();
 function setThumb(thumbEl, name, blob){
   if(previewURLs.has(name)){
     try{ URL.revokeObjectURL(previewURLs.get(name)); }catch{}
@@ -114,24 +111,31 @@ function setThumb(thumbEl, name, blob){
   thumbEl.innerHTML = `<img alt="${escapeAttr(name)}" src="${url}">`;
 }
 
-// ---------- Commands (ALL must be called inside withSerialLock) ----------
+// ---------- Commands ----------
 async function cmdLIST(){
   await writeText("LIST\n");
-  const map = new Map();
 
+  // Wait for BEGIN quickly; if not, firmware didn't answer
+  const first = await readLine(4000);
+  if(first !== "BEGIN"){
+    // Sometimes you get HELLO/boot lines first. Consume until BEGIN or timeout.
+    let line = first;
+    const t0 = Date.now();
+    while(line !== "BEGIN"){
+      if(Date.now() - t0 > 4000) throw new Error("No BEGIN from device (close Serial Monitor / wrong port?)");
+      line = await readLine(2000);
+    }
+  }
+
+  const map = new Map();
   while(true){
     const line = await readLine(15000);
-    if(line === "BEGIN") continue;
     if(line === "END") break;
-
     if(line.startsWith("FILE ")){
       const parts = line.split(" ");
       const name = parts[1];
       const size = parts[2] || "";
       if(!map.has(name)) map.set(name, {name, size});
-    } else if(line.startsWith("ERR")){
-      // firmware shouldn't do this for LIST, but just in case:
-      throw new Error(line);
     }
   }
   return Array.from(map.values());
@@ -142,24 +146,24 @@ async function cmdPLAY(name){
   const resp = await readLine(15000);
   if(resp !== "OK") throw new Error(resp);
 }
+
 async function cmdDEL(name){
   await writeText(`DEL ${name}\n`);
   const resp = await readLine(15000);
   if(resp !== "OK") throw new Error(resp);
 }
+
 async function cmdGET(name){
   await writeText(`GET ${name}\n`);
   const header = await readLine(15000);
   if(!header.startsWith("SIZE ")) throw new Error(header);
-
   const n = parseInt(header.slice(5), 10);
   if(!Number.isFinite(n) || n <= 0) throw new Error("Bad SIZE: " + header);
-
   const bytes = await readBytesExact(n, 60000);
-  return new Blob([bytes], { type: "image/gif" });
+  return new Blob([bytes], { type:"image/gif" });
 }
 
-// ---------- Render + sequential previews ----------
+// ---------- Render + previews (sequential) ----------
 let refreshToken = 0;
 
 async function refreshList(){
@@ -176,7 +180,6 @@ async function refreshList(){
     setUpload("List failed", "bad");
     return;
   }
-
   if(token !== refreshToken) return;
 
   if(!files.length){
@@ -185,8 +188,8 @@ async function refreshList(){
     return;
   }
 
-  // Render cards first
-  const cards = new Map(); // name -> {thumbEl}
+  const cards = new Map();
+
   for(const f of files){
     const item = document.createElement("div");
     item.className = "cardItem";
@@ -245,60 +248,63 @@ async function refreshList(){
 
   setUpload(`Loaded ${files.length} GIF(s). Loading previews…`);
 
-  // IMPORTANT: load previews ONE BY ONE (no overlap)
-  for(let i=0; i<files.length; i++){
+  // previews ONE BY ONE so serial stream stays clean
+  for(const f of files){
     if(token !== refreshToken) return;
 
-    const name = files[i].name;
-    const card = cards.get(name);
-    if(!card) continue;
+    const c = cards.get(f.name);
+    if(!c) continue;
 
-    if(previewURLs.has(name)){
-      card.thumb.innerHTML = `<img alt="${escapeAttr(name)}" src="${previewURLs.get(name)}">`;
+    if(previewURLs.has(f.name)){
+      c.thumb.innerHTML = `<img alt="${escapeAttr(f.name)}" src="${previewURLs.get(f.name)}">`;
       continue;
     }
 
     try{
-      const blob = await withSerialLock(async ()=> await cmdGET(name));
+      const blob = await withSerialLock(async ()=> await cmdGET(f.name));
       if(token !== refreshToken) return;
-      setThumb(card.thumb, name, blob);
+      setThumb(c.thumb, f.name, blob);
     } catch {
-      card.thumb.innerHTML = `<div class="ph">No preview</div>`;
+      c.thumb.innerHTML = `<div class="ph">No preview</div>`;
     }
   }
 
-  setUpload(`Ready ✅ (${files.length} GIFs)`, "good");
+  setUpload("Ready ✅", "good");
 }
 
-// ---------- Upload (also uses serial lock) ----------
+// ---------- Upload (RELIABLE timing) ----------
 async function uploadFlow(){
   clearError();
   const file = fileInput.files?.[0];
   if(!file){ setUpload("Pick a GIF first", "bad"); return; }
 
-  // IMPORTANT: make safe filename (your firmware also sanitizes)
+  // safe filename for your firmware
   const safeName = file.name.replace(/[^\w.\-]/g,"_");
   const bytes = new Uint8Array(await file.arrayBuffer());
 
-  // pause refresh/previews by bumping token
-  refreshToken++;
+  refreshToken++; // cancel any running preview loads
 
   try{
     await withSerialLock(async ()=>{
-      setUpload(`Sending header… (${bytes.length} bytes)`);
-      await writeText(`UPLOAD2 ${safeName} ${bytes.length}\n`);
+      setUpload(`Starting upload… (${bytes.length} bytes)`);
 
+      await writeText(`UPLOAD2 ${safeName} ${bytes.length}\n`);
       const ready = await readLine(20000);
       if(ready !== "READY") throw new Error("Device refused: " + ready);
-
-      await new Promise(r=>setTimeout(r, 20));
 
       const CHUNK = 1024;
       let sent = 0;
 
       while(sent < bytes.length){
         const len = Math.min(CHUNK, bytes.length - sent);
+
+        // send header
         await writeText(`C ${len}\n`);
+
+        // CRITICAL: small delay so firmware finishes reading the line
+        await sleep(8);
+
+        // now send raw bytes
         await writer.write(bytes.slice(sent, sent + len));
         sent += len;
 
@@ -306,6 +312,9 @@ async function uploadFlow(){
         if(!ack.startsWith("ACK ")) throw new Error("Upload failed: " + ack);
 
         setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
+
+        // tiny settle delay helps some PCs
+        await sleep(4);
       }
 
       const done = await readLine(20000);
@@ -313,8 +322,7 @@ async function uploadFlow(){
     });
 
     setUpload("Upload complete ✅", "good");
-    await refreshList(); // auto refresh after upload
-
+    await refreshList(); // show GIFs immediately after upload
   } catch(e){
     showError(e?.message || String(e));
     setUpload("Upload failed", "bad");
@@ -338,7 +346,7 @@ async function connect(){
     setStatus("Opening port chooser…");
     port = await navigator.serial.requestPort();
     setStatus("Opening @115200…");
-    await port.open({ baudRate: 115200 });
+    await port.open({ baudRate:115200 });
 
     writer = port.writable.getWriter();
     reader = port.readable.getReader();
@@ -349,31 +357,14 @@ async function connect(){
     setUpload("Connected. Loading GIFs…");
     updateUploadEnabled();
 
-    // optional HELLO (doesn't matter if missing)
-    try { await readLine(800); } catch {}
-
-    await refreshList(); // AUTO refresh after connect
+    // optional HELLO or boot lines can be in RX; that's OK.
+    await refreshList(); // <-- THIS is what makes SD GIFs show on connect
   } catch(e){
     connected = false;
     updateUploadEnabled();
     setStatus("Not connected");
     showError("Connect failed: " + (e?.message || String(e)));
   }
-}
-
-// Optional auto refresh after flashing
-if(flashBtn){
-  flashBtn.addEventListener("state-changed", async (ev)=>{
-    const st = String(ev?.detail?.state || "").toLowerCase();
-    if(st === "done"){
-      setUpload("Flashed. Reconnect to load GIFs.");
-      // if still connected, try refresh after reboot delay
-      try{
-        await new Promise(r=>setTimeout(r, 2500));
-        if(connected) await refreshList();
-      } catch {}
-    }
-  });
 }
 
 // ---------- Events ----------
