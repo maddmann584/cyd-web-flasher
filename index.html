@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Maddmann’s GIF Player</title>
+  <title>Maddmann GIF Player</title>
   <link rel="stylesheet" href="style.css"/>
 
   <!-- ESP Web Tools (Flashing) -->
@@ -11,41 +11,55 @@
 </head>
 <body>
   <header>
-    <h1>Maddmann’s GIF Player</h1>
-    <p>Flash firmware • Connect • Upload • Click a GIF to play</p>
+    <h1>GIF Player</h1>
+    <p>Flash firmware • Connect • Upload • Tap a GIF to play</p>
   </header>
 
   <main class="card" id="card">
-    <h2>1) Flash firmware</h2>
-    <p class="hint">Use Chrome/Edge. Close Arduino Serial Monitor first.</p>
-    <div class="row">
-      <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
-    </div>
+    <section>
+      <h2>Flash firmware</h2>
+      <p class="hint">Use Chrome/Edge. Must be HTTPS (or localhost). Close Arduino Serial Monitor first.</p>
+      <div class="row center">
+        <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+      </div>
+    </section>
 
-    <hr class="sep"/>
+    <div class="divider"></div>
 
-    <h2>2) Connect</h2>
-    <div class="row">
-      <button id="connectBtn">Connect</button>
-      <span id="status">Not connected</span>
-    </div>
+    <section>
+      <div class="row between">
+        <div>
+          <h2 style="margin:0;">Connect</h2>
+          <div id="status" class="status">Not connected</div>
+        </div>
+        <button id="connectBtn" class="btn primary">Connect</button>
+      </div>
 
-    <div class="row">
-      <input id="fileInput" type="file" accept=".gif,image/gif"/>
-      <button id="uploadBtn" disabled>Upload to /gifs</button>
-      <button id="refreshBtn" disabled>Refresh</button>
-    </div>
+      <div class="row wrap">
+        <input id="fileInput" class="file" type="file" accept=".gif,image/gif"/>
+        <button id="uploadBtn" class="btn" disabled>Upload</button>
+        <button id="refreshBtn" class="btn" disabled>Refresh</button>
+      </div>
 
-    <div id="uploadStatus" class="hint">
-      Tip: Drag & drop a GIF anywhere in this card to auto-resize to 240×320 then upload.
-    </div>
+      <div id="uploadStatus" class="hint">
+        Drag & drop a GIF anywhere on this card to auto-resize to 240×320 and upload.
+      </div>
 
-    <h2>/gifs</h2>
-    <div id="list" class="list"></div>
+      <div id="errorBox" class="error hidden"></div>
+    </section>
 
-    <pre id="debug" class="debug">Debug:\n</pre>
+    <div class="divider"></div>
 
-    <!-- Drag overlay (only visible while dragging) -->
+    <section>
+      <div class="row between">
+        <h2 style="margin:0;">Your GIFs</h2>
+        <div class="pill">Scroll when full</div>
+      </div>
+
+      <div id="grid" class="grid"></div>
+    </section>
+
+    <!-- Drag overlay -->
     <div id="dropOverlay" class="dropOverlay hidden">
       Drop GIF to resize to 240×320 and upload
     </div>
