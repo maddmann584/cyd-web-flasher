@@ -7,14 +7,17 @@ const uploadStatus = document.getElementById("uploadStatus");
 const listEl = document.getElementById("list");
 const debugEl = document.getElementById("debug");
 
-const dropZone = document.getElementById("dropZone");
-const targetSizeEl = document.getElementById("targetSize");
-const fitModeEl = document.getElementById("fitMode");
+const card = document.getElementById("card");
+const dropOverlay = document.getElementById("dropOverlay");
 
 let port=null, reader=null, writer=null;
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 let rxBuf = "";
+
+const TARGET_W = 240;   // ✅ your screen
+const TARGET_H = 320;   // ✅ your screen
+const FIT_MODE = "contain"; // contain | cover | stretch
 
 function log(msg){
   debugEl.textContent += msg + "\n";
@@ -74,7 +77,7 @@ async function connect(){
   setStatus("Connected ✅","good");
   disableUI(false);
 
-  // Optional hello
+  // Optional hello line
   try {
     const hello = await readLine(1500);
     log("RX: " + hello);
@@ -148,14 +151,7 @@ async function refreshList(){
   });
 }
 
-// ---------- GIF resize + re-encode ----------
-
-// parse "240x320" etc
-function getTargetWH(){
-  const [w,h] = targetSizeEl.value.split("x").map(n=>parseInt(n,10));
-  return {w,h};
-}
-
+// ---------- Resize GIF to screen ----------
 function drawFit(ctx, img, tw, th, mode){
   const iw = img.width, ih = img.height;
   ctx.clearRect(0,0,tw,th);
@@ -177,75 +173,64 @@ function drawFit(ctx, img, tw, th, mode){
   ctx.drawImage(img, dx, dy, dw, dh);
 }
 
-async function resizeGifToScreen(file, tw, th, fitMode){
+async function resizeGifTo240x320(file){
   const buf = await file.arrayBuffer();
   const gifObj = window.gifuct.parseGIF(buf);
-  const frames = window.gifuct.decompressFrames(gifObj, true); // true => build patches
+  const frames = window.gifuct.decompressFrames(gifObj, true);
 
-  // Offscreen canvases
-  const canvas = document.createElement("canvas");
-  canvas.width = tw;
-  canvas.height = th;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const outCanvas = document.createElement("canvas");
+  outCanvas.width = TARGET_W;
+  outCanvas.height = TARGET_H;
+  const outCtx = outCanvas.getContext("2d", { willReadFrequently: true });
 
-  // We build a full RGBA frame each time using gifuct patches
   const srcCanvas = document.createElement("canvas");
   srcCanvas.width = gifObj.lsd.width;
   srcCanvas.height = gifObj.lsd.height;
   const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
 
-  // Encoder
   const encoder = new window.GIF({
     workers: 2,
     quality: 10,
-    width: tw,
-    height: th,
+    width: TARGET_W,
+    height: TARGET_H,
     workerScript: "https://unpkg.com/gif.js.optimized/dist/gif.worker.js"
   });
 
-  // For each frame: draw patch into srcCanvas, then scale to target canvas, add to encoder
-  for(let i=0;i<frames.length;i++){
-    const fr = frames[i];
-
-    // draw patch into src canvas at correct position
+  for(const fr of frames){
     const imageData = srcCtx.createImageData(fr.dims.width, fr.dims.height);
     imageData.data.set(fr.patch);
     srcCtx.putImageData(imageData, fr.dims.left, fr.dims.top);
 
-    // scale to target
-    drawFit(ctx, srcCanvas, tw, th, fitMode);
+    drawFit(outCtx, srcCanvas, TARGET_W, TARGET_H, FIT_MODE);
 
-    // frame delay in ms (gifuct gives delay in hundredths sometimes; normalize)
-    let delayMs = fr.delay != null ? fr.delay * 10 : 60; // fr.delay is usually in 1/100s
+    // gifuct delay is usually in 1/100 seconds
+    let delayMs = fr.delay != null ? fr.delay * 10 : 60;
     if(delayMs < 10) delayMs = 10;
-    if(delayMs > 200) delayMs = 200; // keep sane for your player
+    if(delayMs > 200) delayMs = 200;
 
-    encoder.addFrame(ctx, { copy: true, delay: delayMs });
+    encoder.addFrame(outCtx, { copy: true, delay: delayMs });
   }
 
-  // render to blob
   const outBlob = await new Promise((resolve, reject)=>{
     encoder.on("finished", resolve);
     encoder.on("abort", ()=>reject(new Error("GIF encode aborted")));
     encoder.render();
   });
 
-  // Make a new filename
-  const base = file.name.replace(/\.gif$/i,"");
-  const newName = `${base}_${tw}x${th}.gif`;
-
+  const base = file.name.replace(/\.gif$/i,"").replace(/[^\w.\-]/g,"_");
+  const newName = `${base}_${TARGET_W}x${TARGET_H}.gif`;
   return { blob: outBlob, name: newName };
 }
 
-// ---------- Upload ----------
-async function uploadOne(name, bytes){
+// ---------- Upload (uses your firmware protocol) ----------
+async function uploadBytes(name, bytes){
   setUpload(`Sending header… (${bytes.length} bytes)`);
   log(`TX: UPLOAD2 ${name} ${bytes.length}`);
   await writeText(`UPLOAD2 ${name} ${bytes.length}\n`);
 
   const ready = await readLine(15000);
   log("RX: " + ready);
-  if(ready !== "READY"){ throw new Error("Device refused: " + ready); }
+  if(ready !== "READY") throw new Error("Device refused: " + ready);
 
   await new Promise(r=>setTimeout(r, 20));
 
@@ -260,68 +245,60 @@ async function uploadOne(name, bytes){
 
     const ack = await readLine(15000);
     log("RX: " + ack);
-    if(!ack.startsWith("ACK ")){ throw new Error("Upload failed: " + ack); }
+    if(!ack.startsWith("ACK ")) throw new Error("Upload failed: " + ack);
 
     setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
   }
 
   const done = await readLine(15000);
   log("RX: " + done);
-  if(done !== "OK"){ throw new Error("Upload failed: " + done); }
+  if(done !== "OK") throw new Error("Upload failed: " + done);
 }
 
-async function uploadSelectedFiles(){
-  const files = fileInput.files ? Array.from(fileInput.files) : [];
-  if(!files.length){ setUpload("Pick GIF(s) first","bad"); return; }
+async function uploadReliable(){
+  const file = fileInput.files?.[0];
+  if(!file){ setUpload("Pick a GIF first","bad"); return; }
 
-  const {w, h} = getTargetWH();
-  const fitMode = fitModeEl.value;
+  setUpload(`Resizing to ${TARGET_W}x${TARGET_H}…`);
+  log("Resizing: " + file.name);
 
-  for(let idx=0; idx<files.length; idx++){
-    const file = files[idx];
-    if(!/\.gif$/i.test(file.name)){
-      setUpload(`Skipping non-GIF: ${file.name}`,"warn");
-      continue;
-    }
+  const { blob, name } = await resizeGifTo240x320(file);
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const safeName = name.replace(/[^\w.\-]/g,"_");
 
-    setUpload(`Resizing ${file.name} → ${w}x${h} (${fitMode})…`);
-    log(`Resizing: ${file.name}`);
+  setUpload(`Uploading ${safeName}…`);
+  await uploadBytes(safeName, bytes);
 
-    const { blob, name } = await resizeGifToScreen(file, w, h, fitMode);
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-
-    setUpload(`Uploading ${name} (${bytes.length} bytes)…`);
-    await uploadOne(name.replace(/[^\w.\-]/g,"_"), bytes);
-
-    setUpload(`Uploaded ✅ ${name}`,"good");
-  }
-
+  setUpload("Upload complete ✅","good");
   await refreshList();
 }
 
-// ---------- Drag & drop ----------
-function setFilesFromDrop(fileList){
+// ---------- Drag & drop (keeps old UI) ----------
+function setDroppedFile(file){
   const dt = new DataTransfer();
-  for (const f of fileList) dt.items.add(f);
+  dt.items.add(file);
   fileInput.files = dt.files;
-  setUpload(`${dt.files.length} file(s) ready. Click “Resize + Upload”.`, "warn");
+  setUpload(`Dropped: ${file.name} (ready). Click Upload to /gifs`);
 }
 
-dropZone.addEventListener("dragover", (e)=>{
+document.addEventListener("dragover", (e)=>{
   e.preventDefault();
-  dropZone.classList.add("dragover");
+  if(dropOverlay) dropOverlay.classList.remove("hidden");
 });
-dropZone.addEventListener("dragleave", ()=>{
-  dropZone.classList.remove("dragover");
+document.addEventListener("dragleave", ()=>{
+  if(dropOverlay) dropOverlay.classList.add("hidden");
 });
-dropZone.addEventListener("drop", (e)=>{
+document.addEventListener("drop", (e)=>{
   e.preventDefault();
-  dropZone.classList.remove("dragover");
-  const files = Array.from(e.dataTransfer.files || []).filter(f=>/\.gif$/i.test(f.name));
-  if(!files.length){ setUpload("Drop GIF files only", "bad"); return; }
-  setFilesFromDrop(files);
+  if(dropOverlay) dropOverlay.classList.add("hidden");
+
+  const files = Array.from(e.dataTransfer?.files || []);
+  const gif = files.find(f => /\.gif$/i.test(f.name));
+  if(!gif){ setUpload("Drop a .gif file","bad"); return; }
+  setDroppedFile(gif);
 });
 
+// ---------- UI wiring ----------
 disableUI(true);
 setStatus("Not connected","warn");
 setUpload("Uploads go to /gifs");
@@ -337,6 +314,6 @@ refreshBtn.onclick = async ()=>{
 };
 
 uploadBtn.onclick = async ()=>{
-  try { await uploadSelectedFiles(); }
+  try { await uploadReliable(); }
   catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
 };
