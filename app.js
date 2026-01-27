@@ -101,7 +101,10 @@ async function refreshList(){
   log("TX: LIST");
   await writeText("LIST\n");
 
-  const files = [];
+  // Use a Map to dedupe by filename (prevents duplicates showing twice)
+  // If the ESP reports the same filename twice, the last one wins.
+  const fileMap = new Map();
+
   while(true){
     const line = await readLine();
     log("RX: " + line);
@@ -111,9 +114,14 @@ async function refreshList(){
 
     if(line.startsWith("FILE ")){
       const parts = line.split(" ");
-      files.push({ name: parts[1], size: parts[2] || "" });
+      const name = parts[1] || "";
+      const size = parts[2] || "";
+      if(name) fileMap.set(name, { name, size });
     }
   }
+
+  const files = Array.from(fileMap.values())
+    .sort((a,b) => a.name.localeCompare(b.name));
 
   if(files.length === 0){
     listEl.innerHTML = `<div class="hint">No GIFs in /gifs</div>`;
@@ -121,19 +129,19 @@ async function refreshList(){
   }
 
   for(const f of files){
-    const row = document.createElement("div");
-    row.className = "item";
-    row.innerHTML = `
-      <div>
-        <div class="name">${escapeHtml(f.name)}</div>
-        <div class="meta">${escapeHtml(f.size)} bytes</div>
+    const card = document.createElement("div");
+    card.className = "gif-card";
+    card.innerHTML = `
+      <div class="gif-top">
+        <div class="gif-name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
+        <div class="gif-meta">${escapeHtml(f.size)} bytes</div>
       </div>
-      <div class="actions">
+      <div class="gif-actions">
         <button class="play" data-play="${escapeAttr(f.name)}">Play</button>
         <button class="del" data-del="${escapeAttr(f.name)}">Delete</button>
       </div>
     `;
-    listEl.appendChild(row);
+    listEl.appendChild(card);
   }
 
   listEl.querySelectorAll("[data-play]").forEach(btn => {
@@ -182,7 +190,6 @@ async function uploadReliable(){
     return;
   }
 
-  // tiny delay helps stability on some PCs
   await new Promise(r => setTimeout(r, 20));
 
   const CHUNK = 1024;
