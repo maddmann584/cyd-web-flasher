@@ -1,9 +1,4 @@
-// app.js — stable WebSerial client for your firmware protocol
-// Commands: LIST, PLAY <name>, DEL <name>, GET <name>, UPLOAD2 <name> <bytes>
-// IMPORTANT: runs EVERYTHING through a single serial queue (no overlap)
-
 const connectBtn   = document.getElementById("connectBtn");
-const reloadBtn    = document.getElementById("reloadBtn");
 const statusEl     = document.getElementById("status");
 const fileInput    = document.getElementById("fileInput");
 const uploadBtn    = document.getElementById("uploadBtn");
@@ -17,7 +12,6 @@ let connected=false;
 let rx = new Uint8Array(0);
 const dec = new TextDecoder();
 const enc = new TextEncoder();
-
 const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
 
 function setStatus(msg, ok=false){
@@ -49,7 +43,6 @@ function concatBytes(a,b){
   out.set(a,0); out.set(b,a.length);
   return out;
 }
-
 async function pump(timeoutMs=15000){
   const start = Date.now();
   while(true){
@@ -62,7 +55,6 @@ async function pump(timeoutMs=15000){
     }
   }
 }
-
 async function readLine(timeoutMs=15000){
   const start = Date.now();
   while(true){
@@ -79,8 +71,7 @@ async function readLine(timeoutMs=15000){
     await pump(timeoutMs);
   }
 }
-
-async function readBytesExact(n, timeoutMs=60000){
+async function readBytesExact(n, timeoutMs=90000){
   const start = Date.now();
   while(rx.length < n){
     if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for bytes");
@@ -90,32 +81,28 @@ async function readBytesExact(n, timeoutMs=60000){
   rx = rx.slice(n);
   return out;
 }
-
 async function writeText(s){
   await writer.write(enc.encode(s));
 }
 
-async function flushNoise(ms=160){
-  // Clear rx + absorb any boot/HELLO spam for a short time window
+async function flushNoise(ms=200){
   rx = new Uint8Array(0);
   const t0 = Date.now();
   while(Date.now()-t0 < ms){
-    try{ await pump(25); } catch {}
-    await sleep(6);
+    try{ await pump(30); } catch {}
+    await sleep(8);
   }
   rx = new Uint8Array(0);
 }
 
 function isNoise(line){
   if(!line) return true;
-  if(line === "HELLO") return true;
   if(line.startsWith("ets ") || line.startsWith("rst:") || line.startsWith("load:") ||
-     line.startsWith("entry ") || line.startsWith("configsip:") || line.startsWith("mode:") ||
-     line.includes("boot:") || line.includes("SPI_FAST_FLASH_BOOT")) return true;
+     line.startsWith("entry ") || line.startsWith("configsip:") || line.startsWith("mode:")) return true;
   return false;
 }
 
-async function readUntil(matchFn, timeoutMs=7000){
+async function readUntil(matchFn, timeoutMs=9000){
   const t0 = Date.now();
   while(true){
     if(Date.now()-t0 > timeoutMs) throw new Error("Timed out waiting for response");
@@ -126,7 +113,7 @@ async function readUntil(matchFn, timeoutMs=7000){
   }
 }
 
-// ---- SERIAL QUEUE (no overlap ever) ----
+// SERIAL QUEUE
 let serialBusy = Promise.resolve();
 function withSerialLock(fn){
   const run = async()=> await fn();
@@ -135,7 +122,7 @@ function withSerialLock(fn){
   return p;
 }
 
-// ---- Preview cache ----
+// Preview cache
 const previewURLs = new Map();
 function setThumb(thumbEl, name, blob){
   if(previewURLs.has(name)){
@@ -147,10 +134,16 @@ function setThumb(thumbEl, name, blob){
 }
 
 // ---- Firmware commands ----
+async function cmdPING(){
+  await flushNoise(150);
+  await writeText("PING\n");
+  await readUntil(l => l === "PONG", 9000);
+}
+
 async function cmdLIST(){
-  await flushNoise(140);
+  await flushNoise(150);
   await writeText("LIST\n");
-  await readUntil(l => l === "BEGIN", 8000);
+  await readUntil(l => l === "BEGIN", 9000);
 
   const map = new Map();
   while(true){
@@ -170,44 +163,46 @@ async function cmdLIST(){
 async function cmdPLAY(name){
   await flushNoise(80);
   await writeText(`PLAY ${name}\n`);
-  await readUntil(l => l === "OK", 6000);
+  await readUntil(l => l === "OK", 9000);
 }
 
 async function cmdDEL(name){
   await flushNoise(80);
   await writeText(`DEL ${name}\n`);
-  await readUntil(l => l === "OK", 9000);
+  await readUntil(l => l === "OK", 15000);
 }
 
-async function cmdGET(name){
-  await flushNoise(80);
-  await writeText(`GET ${name}\n`);
-  const header = await readUntil(l => l.startsWith("SIZE "), 9000);
+async function cmdGET2(name){
+  await flushNoise(100);
+  await writeText(`GET2 ${name}\n`);
+  const header = await readUntil(l => l.startsWith("SIZE "), 15000);
   const n = parseInt(header.slice(5), 10);
   if(!Number.isFinite(n) || n <= 0) throw new Error("Bad SIZE: " + header);
+
   const bytes = await readBytesExact(n, 90000);
+
+  // After bytes, firmware sends blank line + DONE
+  await readUntil(l => l === "DONE", 15000);
+
   return new Blob([bytes], {type:"image/gif"});
 }
 
 async function cmdUPLOAD2(filename, bytes){
-  await flushNoise(160);
+  await flushNoise(200);
   await writeText(`UPLOAD2 ${filename} ${bytes.length}\n`);
-  await readUntil(l => l === "READY", 15000);
+  await readUntil(l => l === "READY", 20000);
 
-  // smaller chunks = way more reliable on CYD + SD
   const CHUNK = 256;
   let sent = 0;
 
   while(sent < bytes.length){
     const len = Math.min(CHUNK, bytes.length - sent);
     await writeText(`C ${len}\n`);
-    await sleep(12);                    // let firmware finish reading header line
+    await sleep(12);
     await writer.write(bytes.slice(sent, sent + len));
     sent += len;
 
-    const ack = await readUntil(l => l.startsWith("ACK "), 20000);
-    if(!ack.startsWith("ACK ")) throw new Error("Bad ACK: " + ack);
-
+    await readUntil(l => l.startsWith("ACK "), 20000);
     setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
     await sleep(6);
   }
@@ -215,7 +210,7 @@ async function cmdUPLOAD2(filename, bytes){
   await readUntil(l => l === "OK", 25000);
 }
 
-// ---- UI render ----
+// ---- UI ----
 let refreshToken = 0;
 
 async function refreshList(){
@@ -226,11 +221,14 @@ async function refreshList(){
 
   let files = [];
   try{
-    // retry so it loads “every time”
+    // ensure the board is ready
+    await withSerialLock(async()=> await cmdPING());
+
+    // retry LIST for “every time”
     for(let i=0;i<3;i++){
       files = await withSerialLock(async()=> await cmdLIST());
-      if(files) break;
-      await sleep(200);
+      if(files && files.length >= 0) break;
+      await sleep(250);
     }
   } catch(e){
     showError("LIST failed:\n" + (e?.message || String(e)));
@@ -254,7 +252,7 @@ async function refreshList(){
 
     const thumb = document.createElement("div");
     thumb.className = "thumb";
-    thumb.innerHTML = `<div class="ph">Loading preview…</div>`;
+    thumb.innerHTML = `<div class="ph">Preview…</div>`;
 
     const meta = document.createElement("div");
     meta.className = "meta";
@@ -302,19 +300,19 @@ async function refreshList(){
     cards.set(f.name, {thumb});
   }
 
-  setUpload(`Loaded ${files.length} GIF(s). Previews…`);
+  setUpload(`Loaded ${files.length} GIF(s). Loading previews…`);
 
-  // previews sequential (and safe)
+  // previews sequential
   for(const f of files){
     if(token !== refreshToken) return;
     const c = cards.get(f.name);
     if(!c) continue;
 
     try{
-      const blob = await withSerialLock(async()=> await cmdGET(f.name));
+      const blob = await withSerialLock(async()=> await cmdGET2(f.name));
       if(token !== refreshToken) return;
       setThumb(c.thumb, f.name, blob);
-    } catch(e){
+    } catch {
       c.thumb.innerHTML = `<div class="ph">No preview</div>`;
     }
   }
@@ -322,7 +320,6 @@ async function refreshList(){
   setUpload("Ready ✅", "good");
 }
 
-// ---- Upload flow ----
 async function uploadFlow(){
   clearError();
   const file = fileInput.files?.[0];
@@ -331,8 +328,7 @@ async function uploadFlow(){
   const safe = file.name.replace(/[^\w.\-]/g,"_");
   const bytes = new Uint8Array(await file.arrayBuffer());
 
-  // cancel any preview loading
-  refreshToken++;
+  refreshToken++; // cancel preview loads
 
   try{
     setUpload(`Uploading ${safe}…`);
@@ -345,7 +341,6 @@ async function uploadFlow(){
   }
 }
 
-// ---- Connect ----
 async function connect(){
   clearError();
 
@@ -372,24 +367,21 @@ async function connect(){
     setStatus("Connected ✅", true);
     updateUploadEnabled();
 
-    setUpload("Loading GIFs from SD…");
-    await sleep(300);           // let board finish boot spam
+    setUpload("Syncing…");
+    await sleep(600); // allow reboot/SD init after serial open
     await refreshList();
   } catch(e){
-    connected=false;
+    connected = false;
     updateUploadEnabled();
     setStatus("Not connected");
     showError("Connect failed:\n" + (e?.message || String(e)));
   }
 }
 
-// ---- events ----
 connectBtn.onclick = ()=>connect();
-reloadBtn.onclick = ()=>refreshList();
 uploadBtn.onclick = ()=>uploadFlow();
 fileInput.onchange = ()=>updateUploadEnabled();
 
-// init
 setStatus("Not connected");
 setUpload("Connect to load your GIFs");
 updateUploadEnabled();
