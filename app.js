@@ -7,6 +7,10 @@ const uploadStatus = document.getElementById("uploadStatus");
 const listEl = document.getElementById("list");
 const debugEl = document.getElementById("debug");
 
+const dropZone = document.getElementById("dropZone");
+const targetSizeEl = document.getElementById("targetSize");
+const fitModeEl = document.getElementById("fitMode");
+
 let port=null, reader=null, writer=null;
 const dec = new TextDecoder();
 const enc = new TextEncoder();
@@ -70,7 +74,7 @@ async function connect(){
   setStatus("Connected ✅","good");
   disableUI(false);
 
-  // optional hello
+  // Optional hello
   try {
     const hello = await readLine(1500);
     log("RX: " + hello);
@@ -144,22 +148,105 @@ async function refreshList(){
   });
 }
 
-async function uploadReliable(){
-  const file = fileInput.files?.[0];
-  if(!file){ setUpload("Pick a GIF first","bad"); return; }
+// ---------- GIF resize + re-encode ----------
 
-  const safeName = file.name.replace(/[^\w.\-]/g,"_");
-  const bytes = new Uint8Array(await file.arrayBuffer());
+// parse "240x320" etc
+function getTargetWH(){
+  const [w,h] = targetSizeEl.value.split("x").map(n=>parseInt(n,10));
+  return {w,h};
+}
 
+function drawFit(ctx, img, tw, th, mode){
+  const iw = img.width, ih = img.height;
+  ctx.clearRect(0,0,tw,th);
+
+  if(mode === "stretch"){
+    ctx.drawImage(img, 0,0,tw,th);
+    return;
+  }
+
+  const scaleContain = Math.min(tw/iw, th/ih);
+  const scaleCover   = Math.max(tw/iw, th/ih);
+  const s = (mode === "cover") ? scaleCover : scaleContain;
+
+  const dw = Math.round(iw * s);
+  const dh = Math.round(ih * s);
+  const dx = Math.round((tw - dw)/2);
+  const dy = Math.round((th - dh)/2);
+
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
+async function resizeGifToScreen(file, tw, th, fitMode){
+  const buf = await file.arrayBuffer();
+  const gifObj = window.gifuct.parseGIF(buf);
+  const frames = window.gifuct.decompressFrames(gifObj, true); // true => build patches
+
+  // Offscreen canvases
+  const canvas = document.createElement("canvas");
+  canvas.width = tw;
+  canvas.height = th;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+  // We build a full RGBA frame each time using gifuct patches
+  const srcCanvas = document.createElement("canvas");
+  srcCanvas.width = gifObj.lsd.width;
+  srcCanvas.height = gifObj.lsd.height;
+  const srcCtx = srcCanvas.getContext("2d", { willReadFrequently: true });
+
+  // Encoder
+  const encoder = new window.GIF({
+    workers: 2,
+    quality: 10,
+    width: tw,
+    height: th,
+    workerScript: "https://unpkg.com/gif.js.optimized/dist/gif.worker.js"
+  });
+
+  // For each frame: draw patch into srcCanvas, then scale to target canvas, add to encoder
+  for(let i=0;i<frames.length;i++){
+    const fr = frames[i];
+
+    // draw patch into src canvas at correct position
+    const imageData = srcCtx.createImageData(fr.dims.width, fr.dims.height);
+    imageData.data.set(fr.patch);
+    srcCtx.putImageData(imageData, fr.dims.left, fr.dims.top);
+
+    // scale to target
+    drawFit(ctx, srcCanvas, tw, th, fitMode);
+
+    // frame delay in ms (gifuct gives delay in hundredths sometimes; normalize)
+    let delayMs = fr.delay != null ? fr.delay * 10 : 60; // fr.delay is usually in 1/100s
+    if(delayMs < 10) delayMs = 10;
+    if(delayMs > 200) delayMs = 200; // keep sane for your player
+
+    encoder.addFrame(ctx, { copy: true, delay: delayMs });
+  }
+
+  // render to blob
+  const outBlob = await new Promise((resolve, reject)=>{
+    encoder.on("finished", resolve);
+    encoder.on("abort", ()=>reject(new Error("GIF encode aborted")));
+    encoder.render();
+  });
+
+  // Make a new filename
+  const base = file.name.replace(/\.gif$/i,"");
+  const newName = `${base}_${tw}x${th}.gif`;
+
+  return { blob: outBlob, name: newName };
+}
+
+// ---------- Upload ----------
+async function uploadOne(name, bytes){
   setUpload(`Sending header… (${bytes.length} bytes)`);
-  log(`TX: UPLOAD2 ${safeName} ${bytes.length}`);
-  await writeText(`UPLOAD2 ${safeName} ${bytes.length}\n`);
+  log(`TX: UPLOAD2 ${name} ${bytes.length}`);
+  await writeText(`UPLOAD2 ${name} ${bytes.length}\n`);
 
   const ready = await readLine(15000);
   log("RX: " + ready);
-  if(ready !== "READY"){ setUpload("Device refused: " + ready,"bad"); return; }
+  if(ready !== "READY"){ throw new Error("Device refused: " + ready); }
 
-  // tiny delay helps stability on some PCs
   await new Promise(r=>setTimeout(r, 20));
 
   const CHUNK = 1024;
@@ -173,20 +260,67 @@ async function uploadReliable(){
 
     const ack = await readLine(15000);
     log("RX: " + ack);
-    if(!ack.startsWith("ACK ")){ setUpload("Upload failed: " + ack,"bad"); return; }
+    if(!ack.startsWith("ACK ")){ throw new Error("Upload failed: " + ack); }
 
     setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
   }
 
   const done = await readLine(15000);
   log("RX: " + done);
-  if(done === "OK"){
-    setUpload("Upload complete ✅","good");
-    await refreshList();
-  } else {
-    setUpload("Upload failed: " + done,"bad");
-  }
+  if(done !== "OK"){ throw new Error("Upload failed: " + done); }
 }
+
+async function uploadSelectedFiles(){
+  const files = fileInput.files ? Array.from(fileInput.files) : [];
+  if(!files.length){ setUpload("Pick GIF(s) first","bad"); return; }
+
+  const {w, h} = getTargetWH();
+  const fitMode = fitModeEl.value;
+
+  for(let idx=0; idx<files.length; idx++){
+    const file = files[idx];
+    if(!/\.gif$/i.test(file.name)){
+      setUpload(`Skipping non-GIF: ${file.name}`,"warn");
+      continue;
+    }
+
+    setUpload(`Resizing ${file.name} → ${w}x${h} (${fitMode})…`);
+    log(`Resizing: ${file.name}`);
+
+    const { blob, name } = await resizeGifToScreen(file, w, h, fitMode);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+
+    setUpload(`Uploading ${name} (${bytes.length} bytes)…`);
+    await uploadOne(name.replace(/[^\w.\-]/g,"_"), bytes);
+
+    setUpload(`Uploaded ✅ ${name}`,"good");
+  }
+
+  await refreshList();
+}
+
+// ---------- Drag & drop ----------
+function setFilesFromDrop(fileList){
+  const dt = new DataTransfer();
+  for (const f of fileList) dt.items.add(f);
+  fileInput.files = dt.files;
+  setUpload(`${dt.files.length} file(s) ready. Click “Resize + Upload”.`, "warn");
+}
+
+dropZone.addEventListener("dragover", (e)=>{
+  e.preventDefault();
+  dropZone.classList.add("dragover");
+});
+dropZone.addEventListener("dragleave", ()=>{
+  dropZone.classList.remove("dragover");
+});
+dropZone.addEventListener("drop", (e)=>{
+  e.preventDefault();
+  dropZone.classList.remove("dragover");
+  const files = Array.from(e.dataTransfer.files || []).filter(f=>/\.gif$/i.test(f.name));
+  if(!files.length){ setUpload("Drop GIF files only", "bad"); return; }
+  setFilesFromDrop(files);
+});
 
 disableUI(true);
 setStatus("Not connected","warn");
@@ -203,6 +337,6 @@ refreshBtn.onclick = async ()=>{
 };
 
 uploadBtn.onclick = async ()=>{
-  try { await uploadReliable(); }
+  try { await uploadSelectedFiles(); }
   catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
 };
