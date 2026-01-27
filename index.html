@@ -1,49 +1,58 @@
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Maddmann’s GIF Player</title>
-  <link rel="stylesheet" href="style.css"/>
+<main class="card">
+  <h2>1) Flash firmware</h2>
+  <p class="hint">Use Chrome/Edge. Close Arduino Serial Monitor first.</p>
+  <div class="row">
+    <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+  </div>
 
-  <!-- ESP Web Tools (Flashing) -->
-  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
-</head>
-<body>
-  <header>
-    <h1>Maddmann’s GIF Player</h1>
-    <p>Flash firmware • Connect • Upload • Click a GIF to play</p>
-  </header>
+  <hr class="sep"/>
 
-  <main class="card">
-    <h2>1) Flash firmware</h2>
-    <p class="hint">Use Chrome/Edge. Close Arduino Serial Monitor first.</p>
-    <div class="row">
-      <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
-    </div>
+  <h2>2) Connect</h2>
+  <div class="row">
+    <button id="connectBtn">Connect</button>
+    <span id="status">Not connected</span>
+  </div>
 
-    <hr class="sep"/>
+  <hr class="sep"/>
 
-    <h2>2) Connect</h2>
-    <div class="row">
-      <button id="connectBtn">Connect</button>
-      <span id="status">Not connected</span>
-    </div>
+  <h2>3) Drag & drop GIFs (auto resize)</h2>
 
-    <div class="row">
-      <input id="fileInput" type="file" accept=".gif,image/gif"/>
-      <button id="uploadBtn" disabled>Upload to /gifs</button>
-      <button id="refreshBtn" disabled>Refresh</button>
-    </div>
+  <div class="row">
+    <label class="hint">Target size:</label>
+    <select id="targetSize">
+      <option value="240x320" selected>240 x 320 (portrait)</option>
+      <option value="320x240">320 x 240 (landscape)</option>
+    </select>
 
-    <div id="uploadStatus" class="hint">Uploads go to /gifs</div>
+    <label class="hint">Fit:</label>
+    <select id="fitMode">
+      <option value="contain" selected>Contain (no crop)</option>
+      <option value="cover">Cover (crop to fill)</option>
+      <option value="stretch">Stretch</option>
+    </select>
+  </div>
 
-    <h2>/gifs</h2>
-    <div id="list" class="list"></div>
+  <div id="dropZone" class="dropzone">
+    <div class="dropTitle">Drop GIFs here</div>
+    <div class="dropSub">or use the file picker below</div>
+  </div>
 
-    <pre id="debug" class="debug">Debug:\n</pre>
-  </main>
+  <div class="row">
+    <input id="fileInput" type="file" accept=".gif,image/gif" multiple />
+    <button id="uploadBtn" disabled>Resize + Upload</button>
+    <button id="refreshBtn" disabled>Refresh</button>
+  </div>
 
-  <script src="app.js"></script>
-</body>
-</html>
+  <div id="uploadStatus" class="hint">Uploads go to /gifs</div>
+
+  <h2>/gifs</h2>
+  <div id="list" class="list"></div>
+
+  <pre id="debug" class="debug">Debug:\n</pre>
+</main>
+
+<!-- GIF decode + encode libs -->
+<script src="https://unpkg.com/gifuct-js/dist/gifuct.min.js"></script>
+<script src="https://unpkg.com/gif.js.optimized/dist/gif.js"></script>
+
+<script src="app.js"></script>
