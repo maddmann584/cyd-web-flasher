@@ -27,16 +27,53 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 
 .sep { border:0; height:1px; background:#2a2a33; margin:14px 0; }
 
-.list { margin-top:10px; }
-.item {
-  display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;
-  background:#24242a; padding:10px; border-radius:12px; margin:8px 0;
+/* ✅ GRID */
+.list{
+  margin-top:10px;
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap:10px;
 }
-.name { font-family: ui-monospace, Menlo, Consolas, monospace; }
-.meta { color:#a8a8b3; font-size:12px; }
-.actions { display:flex; gap:8px; }
+
+/* ✅ GRID CARD */
+.gif-card{
+  background:#24242a;
+  padding:12px;
+  border-radius:12px;
+  border:1px solid #2a2a33;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+  min-height:110px;
+}
+
+.gif-top{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.gif-name{
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size:14px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.gif-meta{
+  color:#a8a8b3;
+  font-size:12px;
+}
+
+.gif-actions{
+  display:flex;
+  gap:8px;
+  margin-top:10px;
+}
+
 .play { background:#214733; }
-.del { background:#4a2020; }
+.del  { background:#4a2020; }
 
 .debug {
   margin-top:12px; background:#101014; border:1px solid #2a2a33; border-radius:12px;
