@@ -6,10 +6,21 @@ const uploadStatus = document.getElementById("uploadStatus");
 const gridEl       = document.getElementById("grid");
 const errorBox     = document.getElementById("errorBox");
 
+// QUICK TEMP: add a tiny log area
+let logEl = document.getElementById("log");
+if(!logEl){
+  logEl = document.createElement("pre");
+  logEl.id = "log";
+  logEl.style.cssText = "margin-top:10px;padding:10px;border:1px solid #2a2a36;border-radius:12px;max-height:220px;overflow:auto;background:#0f0f14;color:#a5a5b4;font-size:12px;white-space:pre-wrap;";
+  logEl.textContent = "WEB LOG:\n";
+  errorBox.parentElement.appendChild(logEl);
+}
+function log(s){ logEl.textContent += s + "\n"; logEl.scrollTop = logEl.scrollHeight; }
+
 let port=null, reader=null, writer=null;
 let connected=false;
 
-let rx = new Uint8Array(0);
+let rxText = "";
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
@@ -38,65 +49,53 @@ function escapeHtml(s){
 }
 function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
 
-function concatBytes(a,b){
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a,0); out.set(b,a.length);
-  return out;
-}
+// ---- serial pumping ----
 async function pump(timeoutMs=15000){
   const start = Date.now();
   while(true){
-    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for device");
+    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for serial data");
     const {value, done} = await reader.read();
     if(done) throw new Error("Serial closed");
-    if(value && value.length){
-      rx = concatBytes(rx, value);
+    if(value){
+      rxText += dec.decode(value, {stream:true});
       return;
     }
   }
 }
+
 async function readLine(timeoutMs=15000){
   const start = Date.now();
   while(true){
-    const nl = rx.indexOf(0x0A);
-    if(nl >= 0){
-      let lineBytes = rx.slice(0, nl);
-      rx = rx.slice(nl + 1);
-      if(lineBytes.length && lineBytes[lineBytes.length-1] === 0x0D){
-        lineBytes = lineBytes.slice(0, -1);
-      }
-      return dec.decode(lineBytes).trim();
+    const idx = rxText.indexOf("\n");
+    if(idx >= 0){
+      const line = rxText.slice(0, idx).replace("\r","").trim();
+      rxText = rxText.slice(idx+1);
+      if(line) log("RX: " + line);
+      return line;
     }
     if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for line");
     await pump(timeoutMs);
   }
 }
-async function readBytesExact(n, timeoutMs=90000){
-  const start = Date.now();
-  while(rx.length < n){
-    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for bytes");
-    await pump(timeoutMs);
-  }
-  const out = rx.slice(0, n);
-  rx = rx.slice(n);
-  return out;
-}
+
 async function writeText(s){
+  log("TX: " + s.trim());
   await writer.write(enc.encode(s));
 }
 
-async function flushNoise(ms=200){
-  rx = new Uint8Array(0);
+async function flushInput(ms=200){
+  rxText = "";
   const t0 = Date.now();
   while(Date.now()-t0 < ms){
     try{ await pump(30); } catch {}
-    await sleep(8);
+    await sleep(10);
   }
-  rx = new Uint8Array(0);
+  rxText = "";
 }
 
 function isNoise(line){
   if(!line) return true;
+  if(line === "HELLO") return true;
   if(line.startsWith("ets ") || line.startsWith("rst:") || line.startsWith("load:") ||
      line.startsWith("entry ") || line.startsWith("configsip:") || line.startsWith("mode:")) return true;
   return false;
@@ -113,7 +112,7 @@ async function readUntil(matchFn, timeoutMs=9000){
   }
 }
 
-// SERIAL QUEUE
+// ---- SERIAL QUEUE ----
 let serialBusy = Promise.resolve();
 function withSerialLock(fn){
   const run = async()=> await fn();
@@ -122,28 +121,11 @@ function withSerialLock(fn){
   return p;
 }
 
-// Preview cache
-const previewURLs = new Map();
-function setThumb(thumbEl, name, blob){
-  if(previewURLs.has(name)){
-    try{ URL.revokeObjectURL(previewURLs.get(name)); }catch{}
-  }
-  const url = URL.createObjectURL(blob);
-  previewURLs.set(name, url);
-  thumbEl.innerHTML = `<img alt="${escapeAttr(name)}" src="${url}">`;
-}
-
-// ---- Firmware commands ----
-async function cmdPING(){
-  await flushNoise(150);
-  await writeText("PING\n");
-  await readUntil(l => l === "PONG", 9000);
-}
-
+// ---- LIST ----
 async function cmdLIST(){
-  await flushNoise(150);
+  await flushInput(200);
   await writeText("LIST\n");
-  await readUntil(l => l === "BEGIN", 9000);
+  await readUntil(l => l === "BEGIN", 12000);
 
   const map = new Map();
   while(true){
@@ -160,189 +142,47 @@ async function cmdLIST(){
   return Array.from(map.values());
 }
 
-async function cmdPLAY(name){
-  await flushNoise(80);
-  await writeText(`PLAY ${name}\n`);
-  await readUntil(l => l === "OK", 9000);
-}
-
-async function cmdDEL(name){
-  await flushNoise(80);
-  await writeText(`DEL ${name}\n`);
-  await readUntil(l => l === "OK", 15000);
-}
-
-async function cmdGET2(name){
-  await flushNoise(100);
-  await writeText(`GET2 ${name}\n`);
-  const header = await readUntil(l => l.startsWith("SIZE "), 15000);
-  const n = parseInt(header.slice(5), 10);
-  if(!Number.isFinite(n) || n <= 0) throw new Error("Bad SIZE: " + header);
-
-  const bytes = await readBytesExact(n, 90000);
-
-  // After bytes, firmware sends blank line + DONE
-  await readUntil(l => l === "DONE", 15000);
-
-  return new Blob([bytes], {type:"image/gif"});
-}
-
-async function cmdUPLOAD2(filename, bytes){
-  await flushNoise(200);
-  await writeText(`UPLOAD2 ${filename} ${bytes.length}\n`);
-  await readUntil(l => l === "READY", 20000);
-
-  const CHUNK = 256;
-  let sent = 0;
-
-  while(sent < bytes.length){
-    const len = Math.min(CHUNK, bytes.length - sent);
-    await writeText(`C ${len}\n`);
-    await sleep(12);
-    await writer.write(bytes.slice(sent, sent + len));
-    sent += len;
-
-    await readUntil(l => l.startsWith("ACK "), 20000);
-    setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
-    await sleep(6);
-  }
-
-  await readUntil(l => l === "OK", 25000);
-}
-
-// ---- UI ----
-let refreshToken = 0;
-
 async function refreshList(){
-  const token = ++refreshToken;
   clearError();
   gridEl.innerHTML = "";
   setUpload("Loading GIFs…");
 
-  let files = [];
   try{
-    // ensure the board is ready
-    await withSerialLock(async()=> await cmdPING());
+    const files = await withSerialLock(async()=> await cmdLIST());
 
-    // retry LIST for “every time”
-    for(let i=0;i<3;i++){
-      files = await withSerialLock(async()=> await cmdLIST());
-      if(files && files.length >= 0) break;
-      await sleep(250);
+    if(!files.length){
+      gridEl.innerHTML = `<div class="hint">No GIFs in /gifs</div>`;
+      setUpload("No GIFs found.");
+      return;
     }
+
+    for(const f of files){
+      const item = document.createElement("div");
+      item.className = "cardItem";
+      item.innerHTML = `
+        <div class="thumb"><div class="ph">Preview later</div></div>
+        <div class="meta">
+          <div class="name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
+          <div class="actions">
+            <button class="btn play">Play</button>
+            <button class="btn del">Delete</button>
+          </div>
+        </div>
+      `;
+      gridEl.appendChild(item);
+    }
+
+    setUpload(`Loaded ${files.length} file(s) ✅`, "good");
   } catch(e){
     showError("LIST failed:\n" + (e?.message || String(e)));
     setUpload("List failed", "bad");
-    return;
-  }
-
-  if(token !== refreshToken) return;
-
-  if(!files.length){
-    gridEl.innerHTML = `<div class="hint">No GIFs found in /gifs</div>`;
-    setUpload("No GIFs found.");
-    return;
-  }
-
-  const cards = new Map();
-
-  for(const f of files){
-    const item = document.createElement("div");
-    item.className = "cardItem";
-
-    const thumb = document.createElement("div");
-    thumb.className = "thumb";
-    thumb.innerHTML = `<div class="ph">Preview…</div>`;
-
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.innerHTML = `
-      <div class="name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
-      <div class="actions">
-        <button class="btn play">Play</button>
-        <button class="btn del">Delete</button>
-      </div>
-    `;
-
-    meta.querySelector(".play").onclick = async ()=>{
-      clearError();
-      try{
-        setUpload(`Playing: ${f.name}…`);
-        await withSerialLock(async()=> await cmdPLAY(f.name));
-        setUpload(`Playing: ${f.name}`, "good");
-      } catch(e){
-        showError("PLAY failed:\n" + (e?.message || String(e)));
-        setUpload("Play failed", "bad");
-      }
-    };
-
-    meta.querySelector(".del").onclick = async ()=>{
-      if(!confirm(`Delete ${f.name}?`)) return;
-      clearError();
-      try{
-        setUpload(`Deleting: ${f.name}…`);
-        await withSerialLock(async()=> await cmdDEL(f.name));
-        if(previewURLs.has(f.name)){
-          try{ URL.revokeObjectURL(previewURLs.get(f.name)); }catch{}
-          previewURLs.delete(f.name);
-        }
-        setUpload("Deleted ✅", "good");
-        await refreshList();
-      } catch(e){
-        showError("DEL failed:\n" + (e?.message || String(e)));
-        setUpload("Delete failed", "bad");
-      }
-    };
-
-    item.appendChild(thumb);
-    item.appendChild(meta);
-    gridEl.appendChild(item);
-    cards.set(f.name, {thumb});
-  }
-
-  setUpload(`Loaded ${files.length} GIF(s). Loading previews…`);
-
-  // previews sequential
-  for(const f of files){
-    if(token !== refreshToken) return;
-    const c = cards.get(f.name);
-    if(!c) continue;
-
-    try{
-      const blob = await withSerialLock(async()=> await cmdGET2(f.name));
-      if(token !== refreshToken) return;
-      setThumb(c.thumb, f.name, blob);
-    } catch {
-      c.thumb.innerHTML = `<div class="ph">No preview</div>`;
-    }
-  }
-
-  setUpload("Ready ✅", "good");
-}
-
-async function uploadFlow(){
-  clearError();
-  const file = fileInput.files?.[0];
-  if(!file){ setUpload("Pick a GIF first", "bad"); return; }
-
-  const safe = file.name.replace(/[^\w.\-]/g,"_");
-  const bytes = new Uint8Array(await file.arrayBuffer());
-
-  refreshToken++; // cancel preview loads
-
-  try{
-    setUpload(`Uploading ${safe}…`);
-    await withSerialLock(async()=> await cmdUPLOAD2(safe, bytes));
-    setUpload("Upload complete ✅", "good");
-    await refreshList();
-  } catch(e){
-    showError("UPLOAD failed:\n" + (e?.message || String(e)));
-    setUpload("Upload failed", "bad");
   }
 }
 
+// ---- connect ----
 async function connect(){
   clearError();
+  log("---- CONNECT ----");
 
   if(!(location.protocol === "https:" || location.hostname === "localhost")){
     showError("WebSerial requires HTTPS (or localhost).");
@@ -361,17 +201,20 @@ async function connect(){
 
     writer = port.writable.getWriter();
     reader = port.readable.getReader();
-    rx = new Uint8Array(0);
+    rxText = "";
 
     connected = true;
     setStatus("Connected ✅", true);
     updateUploadEnabled();
 
-    setUpload("Syncing…");
-    await sleep(600); // allow reboot/SD init after serial open
+    setUpload("Waiting for device…");
+    await sleep(700);      // let ESP finish reset/SD mount noise
+    await flushInput(250); // clear boot lines
+
+    // now list
     await refreshList();
   } catch(e){
-    connected = false;
+    connected=false;
     updateUploadEnabled();
     setStatus("Not connected");
     showError("Connect failed:\n" + (e?.message || String(e)));
@@ -379,7 +222,7 @@ async function connect(){
 }
 
 connectBtn.onclick = ()=>connect();
-uploadBtn.onclick = ()=>uploadFlow();
+uploadBtn.onclick = ()=>{};
 fileInput.onchange = ()=>updateUploadEnabled();
 
 setStatus("Not connected");
