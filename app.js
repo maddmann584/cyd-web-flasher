@@ -1,10 +1,12 @@
 const connectBtn   = document.getElementById("connectBtn");
+const reloadBtn    = document.getElementById("reloadBtn");
 const statusEl     = document.getElementById("status");
 const fileInput    = document.getElementById("fileInput");
 const uploadBtn    = document.getElementById("uploadBtn");
 const uploadStatus = document.getElementById("uploadStatus");
 const listEl       = document.getElementById("list");
 const errorBox     = document.getElementById("errorBox");
+const progressBar  = document.getElementById("progressBar");
 
 let port=null, reader=null, writer=null;
 let rxText = "";
@@ -30,8 +32,13 @@ function clearError(){
   errorBox.textContent = "";
   errorBox.classList.add("hidden");
 }
-function updateUploadEnabled(){
+function setProgress(pct){
+  const v = Math.max(0, Math.min(100, pct|0));
+  progressBar.style.width = v + "%";
+}
+function updateUIEnabled(){
   uploadBtn.disabled = !(connected && fileInput.files && fileInput.files[0]);
+  reloadBtn.disabled = !connected;
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -95,7 +102,6 @@ async function cmdLIST(){
   await flushInput(250);
   await writeText("LIST\n");
 
-  // wait for BEGIN
   while(true){
     const l = await readLine(12000);
     if(isNoise(l)) continue;
@@ -142,7 +148,6 @@ async function cmdUPLOAD2(filename, bytes){
   await flushInput(250);
   await writeText(`UPLOAD2 ${filename} ${bytes.length}\n`);
 
-  // wait READY
   while(true){
     const l = await readLine(20000);
     if(isNoise(l)) continue;
@@ -153,6 +158,9 @@ async function cmdUPLOAD2(filename, bytes){
   const CHUNK = 256;
   let sent = 0;
 
+  setProgress(0);
+  setUpload(`Uploading… 0%`);
+
   while(sent < bytes.length){
     const len = Math.min(CHUNK, bytes.length - sent);
     await writeText(`C ${len}\n`);
@@ -160,7 +168,6 @@ async function cmdUPLOAD2(filename, bytes){
     await writer.write(bytes.slice(sent, sent + len));
     sent += len;
 
-    // wait ACK
     while(true){
       const l = await readLine(20000);
       if(isNoise(l)) continue;
@@ -168,11 +175,12 @@ async function cmdUPLOAD2(filename, bytes){
       if(l.startsWith("ERR")) throw new Error(l);
     }
 
-    setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
+    const pct = Math.floor((sent / bytes.length) * 100);
+    setProgress(pct);
+    setUpload(`Uploading… ${pct}%`);
     await sleep(6);
   }
 
-  // wait OK
   while(true){
     const l = await readLine(25000);
     if(isNoise(l)) continue;
@@ -185,6 +193,7 @@ async function refreshList(){
   clearError();
   listEl.innerHTML = "";
   setUpload("Loading GIFs…");
+  setProgress(0);
 
   try{
     const files = await locked(async()=> await cmdLIST());
@@ -244,6 +253,7 @@ async function refreshList(){
 
 async function connect(){
   clearError();
+
   if(!(location.protocol === "https:" || location.hostname === "localhost")){
     showError("WebSerial requires HTTPS (or localhost).");
     return;
@@ -265,20 +275,21 @@ async function connect(){
 
     connected = true;
     setStatus("Connected ✅", true);
-    updateUploadEnabled();
+    updateUIEnabled();
 
     setUpload("Waiting for device…");
-    await sleep(900);        // IMPORTANT: ESP resets here often
-    await refreshList();     // auto refresh after connect
+    await sleep(900);      // ESP may reset here
+    await refreshList();   // auto refresh after connect
   } catch(e){
     connected=false;
-    updateUploadEnabled();
+    updateUIEnabled();
     setStatus("Not connected");
     showError("Connect failed:\n" + (e?.message || String(e)));
   }
 }
 
 connectBtn.onclick = ()=>connect();
+reloadBtn.onclick  = ()=>refreshList();
 
 uploadBtn.onclick = async ()=>{
   clearError();
@@ -291,16 +302,18 @@ uploadBtn.onclick = async ()=>{
   try{
     setUpload(`Uploading ${safe}…`);
     await locked(async()=> await cmdUPLOAD2(safe, bytes));
+    setProgress(100);
     setUpload("Upload complete ✅", "good");
-    await refreshList(); // auto refresh after upload
+    await refreshList();
   } catch(e){
     showError("UPLOAD failed:\n" + (e?.message || String(e)));
     setUpload("Upload failed", "bad");
   }
 };
 
-fileInput.onchange = ()=>updateUploadEnabled();
+fileInput.onchange = ()=>updateUIEnabled();
 
 setStatus("Not connected");
 setUpload("Connect to load your GIFs");
-updateUploadEnabled();
+setProgress(0);
+updateUIEnabled();
