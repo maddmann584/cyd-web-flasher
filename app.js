@@ -1,26 +1,63 @@
-// GIF Player — app.js (NO DRAG/DROP)
-// ✅ Auto refresh after Connect and after Upload
-// ✅ Real GIF previews (GET -> SIZE n -> bytes)
-// ✅ No duplicates (dedupe + cancel stale refresh)
-// ✅ Upload enabled only when connected + file chosen
+// GIF Player — app.js (CONNECT FIX + NO DRAG/DROP)
+// Works with your firmware: LIST / UPLOAD2 / PLAY / DEL / GET
 
-const connectBtn   = document.getElementById("connectBtn");
-const statusEl     = document.getElementById("status");
-const fileInput    = document.getElementById("fileInput");
-const uploadBtn    = document.getElementById("uploadBtn");
-const uploadStatus = document.getElementById("uploadStatus");
-const gridEl       = document.getElementById("grid");
-const errorBox     = document.getElementById("errorBox");
-const flashBtn     = document.getElementById("flashBtn");
+// ---- Safe DOM getter ----
+function $(id){
+  const el = document.getElementById(id);
+  return el || null;
+}
+
+const connectBtn   = $("connectBtn");
+const statusEl     = $("status");
+const fileInput    = $("fileInput");
+const uploadBtn    = $("uploadBtn");
+const uploadStatus = $("uploadStatus");
+const gridEl       = $("grid");
+const errorBox     = $("errorBox");
+const flashBtn     = $("flashBtn");
 
 let port=null, reader=null, writer=null;
 let connected = false;
 
-// raw byte buffer (required for GET previews)
+// raw byte buffer for lines + binary GET
 let rx = new Uint8Array(0);
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 
+function setStatus(msg, ok=false){
+  if(!statusEl) return;
+  statusEl.textContent = msg;
+  statusEl.style.color = ok ? "#00ff88" : "#a8a8b3";
+}
+function setUpload(msg, kind="muted"){
+  if(!uploadStatus) return;
+  uploadStatus.textContent = msg;
+  uploadStatus.style.color = kind==="good" ? "#00ff88" : kind==="bad" ? "#ff4d4d" : "#a8a8b3";
+}
+function showError(msg){
+  if(!errorBox){
+    alert(msg);
+    return;
+  }
+  errorBox.textContent = msg;
+  errorBox.classList.remove("hidden");
+}
+function clearError(){
+  if(!errorBox) return;
+  errorBox.classList.add("hidden");
+  errorBox.textContent = "";
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
+
+function updateUploadEnabled(){
+  if(!uploadBtn) return;
+  uploadBtn.disabled = !(connected && fileInput && fileInput.files && fileInput.files[0]);
+}
+
+// ---- Serial helpers ----
 function concatBytes(a,b){
   const out = new Uint8Array(a.length + b.length);
   out.set(a,0); out.set(b,a.length);
@@ -68,33 +105,7 @@ async function writeText(s){
   await writer.write(enc.encode(s));
 }
 
-// UI
-function showError(msg){
-  errorBox.textContent = msg;
-  errorBox.classList.remove("hidden");
-}
-function clearError(){
-  errorBox.classList.add("hidden");
-  errorBox.textContent = "";
-}
-function setStatus(msg, ok=false){
-  statusEl.textContent = msg;
-  statusEl.style.color = ok ? "#00ff88" : "#a8a8b3";
-}
-function setUpload(msg, kind="muted"){
-  uploadStatus.textContent = msg;
-  uploadStatus.style.color = kind==="good" ? "#00ff88" : kind==="bad" ? "#ff4d4d" : "#a8a8b3";
-}
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-}
-function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
-
-function updateUploadEnabled(){
-  uploadBtn.disabled = !(connected && fileInput.files && fileInput.files[0]);
-}
-
-// Preview cache
+// ---- Commands ----
 const previewURLs = new Map();
 function setThumb(thumbEl, name, blob){
   if(previewURLs.has(name)){
@@ -105,7 +116,6 @@ function setThumb(thumbEl, name, blob){
   thumbEl.innerHTML = `<img alt="${escapeAttr(name)}" src="${url}">`;
 }
 
-// Commands
 async function cmdLIST(){
   await writeText("LIST\n");
   const map = new Map();
@@ -113,7 +123,6 @@ async function cmdLIST(){
     const line = await readLine(15000);
     if(line === "BEGIN") continue;
     if(line === "END") break;
-
     if(line.startsWith("FILE ")){
       const parts = line.split(" ");
       const name = parts[1];
@@ -123,7 +132,6 @@ async function cmdLIST(){
   }
   return Array.from(map.values());
 }
-
 async function cmdPLAY(name){
   await writeText(`PLAY ${name}\n`);
   const resp = await readLine(15000);
@@ -144,10 +152,10 @@ async function cmdGET(name){
   return new Blob([bytes], { type: "image/gif" });
 }
 
-// Grid refresh (auto + no duplicates)
+// ---- Refresh grid ----
 let refreshToken = 0;
-
 async function refreshList(){
+  if(!gridEl) return;
   const token = ++refreshToken;
   clearError();
   gridEl.innerHTML = "";
@@ -161,7 +169,6 @@ async function refreshList(){
     setUpload("List failed", "bad");
     return;
   }
-
   if(token !== refreshToken) return;
 
   if(!files.length){
@@ -206,7 +213,6 @@ async function refreshList(){
       try{
         setUpload(`Deleting: ${f.name}…`);
         await cmdDEL(f.name);
-
         if(previewURLs.has(f.name)){
           try{ URL.revokeObjectURL(previewURLs.get(f.name)); }catch{}
           previewURLs.delete(f.name);
@@ -223,16 +229,9 @@ async function refreshList(){
     item.appendChild(meta);
     gridEl.appendChild(item);
 
-    // Preview load
     (async ()=>{
       try{
         if(token !== refreshToken) return;
-
-        if(previewURLs.has(f.name)){
-          thumb.innerHTML = `<img alt="${escapeAttr(f.name)}" src="${previewURLs.get(f.name)}">`;
-          return;
-        }
-
         const blob = await cmdGET(f.name);
         if(token !== refreshToken) return;
         setThumb(thumb, f.name, blob);
@@ -245,12 +244,13 @@ async function refreshList(){
   setUpload(`Loaded ${files.length} GIF(s).`);
 }
 
-// Upload
+// ---- Upload ----
 async function uploadFlow(){
   clearError();
-  const file = fileInput.files?.[0];
+  const file = fileInput?.files?.[0];
   if(!file){ setUpload("Pick a GIF first", "bad"); return; }
 
+  // sanitize name for firmware
   const safeName = file.name.replace(/[^\w.\-]/g,"_");
   const bytes = new Uint8Array(await file.arrayBuffer());
 
@@ -282,29 +282,31 @@ async function uploadFlow(){
     if(done !== "OK") throw new Error("Upload failed: " + done);
 
     setUpload("Upload complete ✅", "good");
-    await refreshList(); // auto refresh after upload
+    await refreshList();
   } catch(e){
     showError(e?.message || String(e));
     setUpload("Upload failed", "bad");
   }
 }
 
-// Connect
+// ---- Connect ----
 async function connect(){
   clearError();
 
+  // HARD requirement for WebSerial
+  if(!(location.protocol === "https:" || location.hostname === "localhost")){
+    showError("WebSerial requires HTTPS (or localhost). Put this site on GitHub Pages or use localhost.");
+    return;
+  }
   if(!("serial" in navigator)){
     showError("WebSerial not supported. Use Chrome or Edge.");
     return;
   }
-  if(!(location.protocol === "https:" || location.hostname === "localhost")){
-    showError("This site must be HTTPS (or localhost) for WebSerial to work.");
-    return;
-  }
 
   try{
-    setStatus("Connecting…");
-    port = await navigator.serial.requestPort();
+    setStatus("Opening port chooser…");
+    port = await navigator.serial.requestPort(); // chooser MUST appear here
+    setStatus("Opening @115200…");
     await port.open({ baudRate: 115200 });
 
     writer = port.writable.getWriter();
@@ -319,22 +321,32 @@ async function connect(){
     // optional HELLO
     try { await readLine(800); } catch {}
 
-    await refreshList(); // auto refresh after connect
+    await refreshList(); // auto refresh
   } catch(e){
     connected = false;
-    setStatus("Not connected");
     updateUploadEnabled();
+    setStatus("Not connected");
     showError("Connect failed: " + (e?.message || String(e)));
   }
 }
+
+// ---- Wire up buttons ----
+if(!connectBtn){
+  // If the button id is wrong, show a loud error:
+  showError("Missing element: connectBtn. Check index.html IDs.");
+} else {
+  connectBtn.onclick = async ()=>{ await connect(); };
+}
+
+if(uploadBtn) uploadBtn.onclick = async ()=>{ await uploadFlow(); };
+if(fileInput) fileInput.onchange = ()=> updateUploadEnabled();
 
 // Auto refresh after flashing (optional)
 if(flashBtn){
   flashBtn.addEventListener("state-changed", async (ev)=>{
     const st = String(ev?.detail?.state || "").toLowerCase();
     if(st === "done"){
-      setUpload("Flashed. Reconnect to load GIFs.", "muted");
-      // if already connected, try refresh after reboot delay
+      setUpload("Flashed. Reconnect to load GIFs.");
       try{
         await new Promise(r=>setTimeout(r, 2500));
         if(connected) await refreshList();
@@ -342,11 +354,6 @@ if(flashBtn){
     }
   });
 }
-
-// Events
-connectBtn.onclick = async ()=>{ await connect(); };
-uploadBtn.onclick  = async ()=>{ await uploadFlow(); };
-fileInput.onchange = ()=>{ updateUploadEnabled(); };
 
 // Init
 connected = false;
