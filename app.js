@@ -1,319 +1,249 @@
-const connectBtn   = document.getElementById("connectBtn");
-const reloadBtn    = document.getElementById("reloadBtn");
-const statusEl     = document.getElementById("status");
-const fileInput    = document.getElementById("fileInput");
-const uploadBtn    = document.getElementById("uploadBtn");
+const connectBtn = document.getElementById("connectBtn");
+const statusEl   = document.getElementById("status");
+const fileInput  = document.getElementById("fileInput");
+const uploadBtn  = document.getElementById("uploadBtn");
+const refreshBtn = document.getElementById("refreshBtn");
 const uploadStatus = document.getElementById("uploadStatus");
-const listEl       = document.getElementById("list");
-const errorBox     = document.getElementById("errorBox");
-const progressBar  = document.getElementById("progressBar");
+const listEl = document.getElementById("list");
+const debugEl = document.getElementById("debug");
 
-let port=null, reader=null, writer=null;
-let rxText = "";
+let port = null, reader = null, writer = null;
 const dec = new TextDecoder();
 const enc = new TextEncoder();
-let connected=false;
+let rxBuf = "";
 
-const sleep = (ms)=>new Promise(r=>setTimeout(r, ms));
+function log(msg){
+  debugEl.textContent += msg + "\n";
+  debugEl.scrollTop = debugEl.scrollHeight;
+  console.log(msg);
+}
 
-function setStatus(msg, ok=false){
+function setStatus(msg, kind="warn"){
   statusEl.textContent = msg;
-  statusEl.style.color = ok ? "#00ff88" : "#a8a8b3";
+  statusEl.style.color =
+    kind === "good" ? "#00ff88" :
+    kind === "bad"  ? "#ff4d4d" :
+    "#ffaa00";
 }
-function setUpload(msg, kind="muted"){
-  uploadStatus.textContent = msg;
-  uploadStatus.style.color = kind==="good" ? "#00ff88" : kind==="bad" ? "#ff4d4d" : "#a8a8b3";
-}
-function showError(msg){
-  errorBox.textContent = msg;
-  errorBox.classList.remove("hidden");
-}
-function clearError(){
-  errorBox.textContent = "";
-  errorBox.classList.add("hidden");
-}
-function setProgress(pct){
-  const v = Math.max(0, Math.min(100, pct|0));
-  progressBar.style.width = v + "%";
-}
-function updateUIEnabled(){
-  uploadBtn.disabled = !(connected && fileInput.files && fileInput.files[0]);
-  reloadBtn.disabled = !connected;
-}
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-}
-function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
 
-async function pump(timeoutMs=15000){
-  const start = Date.now();
-  while(true){
-    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for device");
-    const {value, done} = await reader.read();
-    if(done) throw new Error("Serial closed");
-    if(value){
-      rxText += dec.decode(value, {stream:true});
-      return;
-    }
-  }
+function setUpload(msg, kind="warn"){
+  uploadStatus.textContent = msg;
+  uploadStatus.style.color =
+    kind === "good" ? "#00ff88" :
+    kind === "bad"  ? "#ff4d4d" :
+    "#a8a8b3";
 }
-async function readLine(timeoutMs=15000){
+
+function disableUI(disabled){
+  uploadBtn.disabled = disabled;
+  refreshBtn.disabled = disabled;
+}
+
+async function readLine(timeoutMs=12000){
   const start = Date.now();
   while(true){
-    const idx = rxText.indexOf("\n");
+    const idx = rxBuf.indexOf("\n");
     if(idx >= 0){
-      const line = rxText.slice(0, idx).replace("\r","").trim();
-      rxText = rxText.slice(idx+1);
+      const line = rxBuf.slice(0, idx).replace("\r","").trim();
+      rxBuf = rxBuf.slice(idx+1);
       return line;
     }
-    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for line");
-    await pump(timeoutMs);
+    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for ESP32");
+    const { value, done } = await reader.read();
+    if(done) throw new Error("Serial closed");
+    rxBuf += dec.decode(value);
   }
 }
+
 async function writeText(s){
   await writer.write(enc.encode(s));
 }
-async function flushInput(ms=250){
-  rxText = "";
-  const t0 = Date.now();
-  while(Date.now()-t0 < ms){
-    try{ await pump(30); } catch {}
-    await sleep(10);
-  }
-  rxText = "";
-}
-function isNoise(line){
-  if(!line) return true;
-  if(line === "HELLO") return true;
-  if(line.startsWith("ets ") || line.startsWith("rst:") || line.startsWith("load:") ||
-     line.startsWith("entry ") || line.startsWith("configsip:") || line.startsWith("mode:")) return true;
-  return false;
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
 }
 
-// single queue so commands never overlap
-let busy = Promise.resolve();
-function locked(fn){
-  const p = busy.then(fn, fn);
-  busy = p.catch(()=>{});
-  return p;
-}
-
-async function cmdLIST(){
-  await flushInput(250);
-  await writeText("LIST\n");
-
-  while(true){
-    const l = await readLine(12000);
-    if(isNoise(l)) continue;
-    if(l === "BEGIN") break;
-  }
-
-  const map = new Map();
-  while(true){
-    const l = await readLine(15000);
-    if(isNoise(l)) continue;
-    if(l === "END") break;
-    if(l.startsWith("FILE ")){
-      const parts = l.split(" ");
-      const name = parts[1];
-      const size = parts[2] || "";
-      if(name && !map.has(name)) map.set(name, {name, size});
-    }
-  }
-  return Array.from(map.values());
-}
-
-async function cmdPLAY(name){
-  await flushInput(120);
-  await writeText(`PLAY ${name}\n`);
-  while(true){
-    const l = await readLine(9000);
-    if(isNoise(l)) continue;
-    if(l === "OK") return;
-    if(l.startsWith("ERR")) throw new Error(l);
-  }
-}
-async function cmdDEL(name){
-  await flushInput(120);
-  await writeText(`DEL ${name}\n`);
-  while(true){
-    const l = await readLine(15000);
-    if(isNoise(l)) continue;
-    if(l === "OK") return;
-    if(l.startsWith("ERR")) throw new Error(l);
-  }
-}
-
-async function cmdUPLOAD2(filename, bytes){
-  await flushInput(250);
-  await writeText(`UPLOAD2 ${filename} ${bytes.length}\n`);
-
-  while(true){
-    const l = await readLine(20000);
-    if(isNoise(l)) continue;
-    if(l === "READY") break;
-    if(l.startsWith("ERR")) throw new Error(l);
-  }
-
-  const CHUNK = 256;
-  let sent = 0;
-
-  setProgress(0);
-  setUpload(`Uploading… 0%`);
-
-  while(sent < bytes.length){
-    const len = Math.min(CHUNK, bytes.length - sent);
-    await writeText(`C ${len}\n`);
-    await sleep(12);
-    await writer.write(bytes.slice(sent, sent + len));
-    sent += len;
-
-    while(true){
-      const l = await readLine(20000);
-      if(isNoise(l)) continue;
-      if(l.startsWith("ACK ")) break;
-      if(l.startsWith("ERR")) throw new Error(l);
-    }
-
-    const pct = Math.floor((sent / bytes.length) * 100);
-    setProgress(pct);
-    setUpload(`Uploading… ${pct}%`);
-    await sleep(6);
-  }
-
-  while(true){
-    const l = await readLine(25000);
-    if(isNoise(l)) continue;
-    if(l === "OK") return;
-    if(l.startsWith("ERR")) throw new Error(l);
-  }
-}
-
-async function refreshList(){
-  clearError();
-  listEl.innerHTML = "";
-  setUpload("Loading GIFs…");
-  setProgress(0);
-
-  try{
-    const files = await locked(async()=> await cmdLIST());
-
-    if(!files.length){
-      listEl.innerHTML = `<div class="hint">No GIFs found in /gifs</div>`;
-      setUpload("No GIFs found.");
-      return;
-    }
-
-    for(const f of files){
-      const row = document.createElement("div");
-      row.className = "item";
-      row.innerHTML = `
-        <div>
-          <div class="name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
-          <div class="meta">${escapeHtml(f.size)} bytes</div>
-        </div>
-        <div class="actions">
-          <button class="play">Play</button>
-          <button class="del">Delete</button>
-        </div>
-      `;
-      row.querySelector(".play").onclick = async ()=>{
-        clearError();
-        try{
-          setUpload(`Playing ${f.name}…`);
-          await locked(async()=> await cmdPLAY(f.name));
-          setUpload(`Playing ${f.name} ✅`, "good");
-        } catch(e){
-          showError("PLAY failed:\n" + (e?.message || String(e)));
-          setUpload("Play failed", "bad");
-        }
-      };
-      row.querySelector(".del").onclick = async ()=>{
-        if(!confirm(`Delete ${f.name}?`)) return;
-        clearError();
-        try{
-          setUpload(`Deleting ${f.name}…`);
-          await locked(async()=> await cmdDEL(f.name));
-          setUpload("Deleted ✅", "good");
-          await refreshList();
-        } catch(e){
-          showError("DEL failed:\n" + (e?.message || String(e)));
-          setUpload("Delete failed", "bad");
-        }
-      };
-      listEl.appendChild(row);
-    }
-
-    setUpload(`Loaded ${files.length} GIF(s) ✅`, "good");
-  } catch(e){
-    showError("LIST failed:\n" + (e?.message || String(e)));
-    setUpload("List failed", "bad");
-  }
+function escapeAttr(s){
+  return String(s).replace(/["<>]/g, "_");
 }
 
 async function connect(){
-  clearError();
+  if(!("serial" in navigator)) throw new Error("WebSerial not supported. Use Chrome/Edge.");
 
-  if(!(location.protocol === "https:" || location.hostname === "localhost")){
-    showError("WebSerial requires HTTPS (or localhost).");
+  log("Requesting port...");
+  port = await navigator.serial.requestPort();
+
+  log("Opening @115200...");
+  await port.open({ baudRate: 115200 });
+
+  writer = port.writable.getWriter();
+  reader = port.readable.getReader();
+  rxBuf = "";
+
+  setStatus("Connected ✅", "good");
+  disableUI(false);
+
+  // optional hello
+  try {
+    const hello = await readLine(1500);
+    log("RX: " + hello);
+  } catch {
+    log("No HELLO line (ok).");
+  }
+
+  await refreshList();
+}
+
+async function refreshList(){
+  listEl.innerHTML = "";
+  log("TX: LIST");
+  await writeText("LIST\n");
+
+  const files = [];
+  while(true){
+    const line = await readLine();
+    log("RX: " + line);
+
+    if(line === "BEGIN") continue;
+    if(line === "END") break;
+
+    if(line.startsWith("FILE ")){
+      const parts = line.split(" ");
+      files.push({ name: parts[1], size: parts[2] || "" });
+    }
+  }
+
+  if(files.length === 0){
+    listEl.innerHTML = `<div class="hint">No GIFs in /gifs</div>`;
     return;
   }
-  if(!("serial" in navigator)){
-    showError("WebSerial not supported. Use Chrome/Edge.");
+
+  for(const f of files){
+    const row = document.createElement("div");
+    row.className = "item";
+    row.innerHTML = `
+      <div>
+        <div class="name">${escapeHtml(f.name)}</div>
+        <div class="meta">${escapeHtml(f.size)} bytes</div>
+      </div>
+      <div class="actions">
+        <button class="play" data-play="${escapeAttr(f.name)}">Play</button>
+        <button class="del" data-del="${escapeAttr(f.name)}">Delete</button>
+      </div>
+    `;
+    listEl.appendChild(row);
+  }
+
+  listEl.querySelectorAll("[data-play]").forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.getAttribute("data-play");
+      log("TX: PLAY " + name);
+      await writeText(`PLAY ${name}\n`);
+      const resp = await readLine();
+      log("RX: " + resp);
+      if(resp !== "OK") alert("Play failed: " + resp);
+    };
+  });
+
+  listEl.querySelectorAll("[data-del]").forEach(btn => {
+    btn.onclick = async () => {
+      const name = btn.getAttribute("data-del");
+      if(!confirm(`Delete ${name}?`)) return;
+      log("TX: DEL " + name);
+      await writeText(`DEL ${name}\n`);
+      const resp = await readLine();
+      log("RX: " + resp);
+      if(resp === "OK") await refreshList();
+      else alert("Delete failed: " + resp);
+    };
+  });
+}
+
+async function uploadReliable(){
+  const file = fileInput.files?.[0];
+  if(!file){
+    setUpload("Pick a GIF first", "bad");
     return;
   }
 
-  try{
-    setStatus("Choose device…");
-    port = await navigator.serial.requestPort();
-    setStatus("Opening @115200…");
-    await port.open({baudRate:115200});
+  const safeName = file.name.replace(/[^\w.\-]/g, "_");
+  const bytes = new Uint8Array(await file.arrayBuffer());
 
-    writer = port.writable.getWriter();
-    reader = port.readable.getReader();
-    rxText = "";
+  setUpload(`Sending header… (${bytes.length} bytes)`);
+  log(`TX: UPLOAD2 ${safeName} ${bytes.length}`);
+  await writeText(`UPLOAD2 ${safeName} ${bytes.length}\n`);
 
-    connected = true;
-    setStatus("Connected ✅", true);
-    updateUIEnabled();
+  const ready = await readLine(15000);
+  log("RX: " + ready);
+  if(ready !== "READY"){
+    setUpload("Device refused: " + ready, "bad");
+    return;
+  }
 
-    setUpload("Waiting for device…");
-    await sleep(900);      // ESP may reset here
-    await refreshList();   // auto refresh after connect
-  } catch(e){
-    connected=false;
-    updateUIEnabled();
-    setStatus("Not connected");
-    showError("Connect failed:\n" + (e?.message || String(e)));
+  // tiny delay helps stability on some PCs
+  await new Promise(r => setTimeout(r, 20));
+
+  const CHUNK = 1024;
+  let sent = 0;
+
+  while(sent < bytes.length){
+    const len = Math.min(CHUNK, bytes.length - sent);
+
+    await writeText(`C ${len}\n`);
+    await writer.write(bytes.slice(sent, sent + len));
+    sent += len;
+
+    const ack = await readLine(15000);
+    log("RX: " + ack);
+    if(!ack.startsWith("ACK ")){
+      setUpload("Upload failed: " + ack, "bad");
+      return;
+    }
+
+    setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
+  }
+
+  const done = await readLine(15000);
+  log("RX: " + done);
+
+  if(done === "OK"){
+    setUpload("Upload complete ✅", "good");
+    await refreshList();
+  } else {
+    setUpload("Upload failed: " + done, "bad");
   }
 }
 
-connectBtn.onclick = ()=>connect();
-reloadBtn.onclick  = ()=>refreshList();
+// init
+disableUI(true);
+setStatus("Not connected", "warn");
+setUpload("Uploads go to /gifs");
 
-uploadBtn.onclick = async ()=>{
-  clearError();
-  const file = fileInput.files?.[0];
-  if(!file){ setUpload("Pick a GIF first", "bad"); return; }
-
-  const safe = file.name.replace(/[^\w.\-]/g,"_");
-  const bytes = new Uint8Array(await file.arrayBuffer());
-
-  try{
-    setUpload(`Uploading ${safe}…`);
-    await locked(async()=> await cmdUPLOAD2(safe, bytes));
-    setProgress(100);
-    setUpload("Upload complete ✅", "good");
-    await refreshList();
-  } catch(e){
-    showError("UPLOAD failed:\n" + (e?.message || String(e)));
-    setUpload("Upload failed", "bad");
+connectBtn.onclick = async () => {
+  try { await connect(); }
+  catch(e){
+    console.error(e);
+    log("ERROR: " + (e.message || e));
+    setStatus("Connect failed", "bad");
   }
 };
 
-fileInput.onchange = ()=>updateUIEnabled();
+refreshBtn.onclick = async () => {
+  try { await refreshList(); }
+  catch(e){
+    console.error(e);
+    log("ERROR: " + (e.message || e));
+    alert(e.message || String(e));
+  }
+};
 
-setStatus("Not connected");
-setUpload("Connect to load your GIFs");
-setProgress(0);
-updateUIEnabled();
+uploadBtn.onclick = async () => {
+  try { await uploadReliable(); }
+  catch(e){
+    console.error(e);
+    log("ERROR: " + (e.message || e));
+    setUpload(e.message || String(e), "bad");
+  }
+};
