@@ -1,102 +1,30 @@
-:root{
-  --bg:#0b0b0e;
-  --card:#15151b;
-  --card2:#1c1c24;
-  --text:#e9e9f2;
-  --muted:#a5a5b4;
-  --good:#00ff88;
-  --bad:#ff4d4d;
-  --stroke:#2a2a36;
-}
-
-*{ box-sizing:border-box; }
-body{
-  margin:0;
-  background:var(--bg);
-  color:var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-}
-
-.top{
-  padding:18px 14px 10px;
-  border-bottom:1px solid var(--stroke);
-}
-.brand{
-  max-width:1100px;
-  margin:0 auto;
-  display:flex;
-  gap:12px;
-  align-items:center;
-}
-.logo{
-  width:44px; height:44px;
+body{ background:#0f0f10; color:#eaeaea; font-family:Arial,sans-serif; margin:0; }
+header{ text-align:center; padding:22px 12px; }
+h1{ margin:0; color:#00ff88; }
+p{ margin:8px 0 0; color:#a8a8b3; }
+.card{
+  width:min(900px, calc(100% - 24px));
+  margin:0 auto 24px;
+  background:#1b1b1f;
+  padding:16px;
   border-radius:14px;
-  display:grid; place-items:center;
-  background:linear-gradient(135deg, #00ff88, #66a3ff);
-  color:#000;
-  font-weight:900;
 }
-h1{ margin:0; font-size:20px; }
-.sub{ color:var(--muted); font-size:12px; margin-top:2px; }
-
-.wrap{
-  max-width:1100px;
-  margin:14px auto 28px;
-  padding:0 14px;
-  display:grid;
-  gap:12px;
-}
-.panel{
-  background:var(--card);
-  border:1px solid var(--stroke);
-  border-radius:16px;
-  padding:14px;
-}
-h2{ margin:0 0 10px; font-size:14px; color:var(--muted); font-weight:700; }
-.row{
-  display:flex;
-  gap:10px;
-  align-items:center;
-  flex-wrap:wrap;
-}
-.rowSpace{ justify-content:space-between; }
-.status{ color:var(--muted); font-size:13px; }
-
-button{
-  border:0;
-  border-radius:12px;
-  padding:10px 14px;
-  cursor:pointer;
-  background:var(--card2);
-  color:var(--text);
-  border:1px solid var(--stroke);
-}
+.row{ display:flex; gap:10px; justify-content:center; align-items:center; flex-wrap:wrap; margin:10px 0; }
+button{ padding:10px 14px; border-radius:10px; border:0; background:#2b2b33; color:#eaeaea; cursor:pointer; }
 button:disabled{ opacity:.5; cursor:not-allowed; }
-.primary{
-  background:linear-gradient(135deg, #00ff88, #66a3ff);
-  color:#000;
-  font-weight:800;
-  border:0;
+#status{ color:#a8a8b3; }
+.hint{ text-align:center; color:#a8a8b3; font-size:12px; }
+hr{ border:0; height:1px; background:#2a2a33; margin:14px 0; }
+.list{ margin-top:10px; display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:10px; max-height:520px; overflow:auto; }
+.item{
+  background:#24242a; padding:12px; border-radius:12px;
+  display:flex; justify-content:space-between; align-items:center; gap:10px;
 }
-.ghost{
-  background:transparent;
-  border:1px solid var(--stroke);
-  color:var(--muted);
-}
-input[type="file"]{
-  background:var(--card2);
-  border:1px solid var(--stroke);
-  border-radius:12px;
-  padding:10px;
-  color:var(--muted);
-}
-
-.hint{
-  margin-top:8px;
-  color:var(--muted);
-  font-size:12px;
-}
-
+.name{ font-family: ui-monospace, Menlo, Consolas, monospace; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:160px; }
+.meta{ color:#a8a8b3; font-size:12px; }
+.actions{ display:flex; gap:8px; }
+.play{ background:#214733; }
+.del{ background:#4a2020; }
 .error{
   margin:10px 0;
   padding:10px 12px;
@@ -108,64 +36,3 @@ input[type="file"]{
   white-space:pre-wrap;
 }
 .hidden{ display:none; }
-
-.grid{
-  margin-top:10px;
-  display:grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap:10px;
-  max-height:520px;
-  overflow:auto;
-  padding-right:4px;
-}
-.cardItem{
-  background:var(--card2);
-  border:1px solid var(--stroke);
-  border-radius:14px;
-  overflow:hidden;
-  display:flex;
-  flex-direction:column;
-}
-.thumb{
-  height:120px;
-  background:#0f0f14;
-  display:grid;
-  place-items:center;
-}
-.thumb img{
-  width:100%;
-  height:100%;
-  object-fit:cover;
-  image-rendering:auto;
-}
-.ph{
-  color:var(--muted);
-  font-size:12px;
-}
-.meta{
-  padding:10px;
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-}
-.name{
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size:12px;
-  color:var(--text);
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-.actions{
-  display:flex;
-  gap:8px;
-}
-.actions .btn{
-  flex:1;
-  padding:9px 10px;
-  border-radius:12px;
-  background:#111118;
-  border:1px solid var(--stroke);
-  color:var(--text);
-}
-.actions .del{ color:#ffb3b3; }
