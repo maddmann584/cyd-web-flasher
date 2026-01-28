@@ -7,11 +7,11 @@ const uploadStatus = document.getElementById("uploadStatus");
 const listEl = document.getElementById("list");
 const debugEl = document.getElementById("debug");
 
-let port = null, reader = null, writer = null;
+let port=null, reader=null, writer=null;
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 
-// ✅ BYTE BUFFER (binary-safe)
+// ✅ binary-safe buffer
 let rx = new Uint8Array(0);
 
 function log(msg){
@@ -23,16 +23,16 @@ function log(msg){
 function setStatus(msg, kind="warn"){
   statusEl.textContent = msg;
   statusEl.style.color =
-    kind === "good" ? "#00ff88" :
-    kind === "bad"  ? "#ff4d4d" :
+    kind==="good" ? "#00ff88" :
+    kind==="bad"  ? "#ff4d4d" :
     "#ffaa00";
 }
 
 function setUpload(msg, kind="warn"){
   uploadStatus.textContent = msg;
   uploadStatus.style.color =
-    kind === "good" ? "#00ff88" :
-    kind === "bad"  ? "#ff4d4d" :
+    kind==="good" ? "#00ff88" :
+    kind==="bad"  ? "#ff4d4d" :
     "#a8a8b3";
 }
 
@@ -42,19 +42,9 @@ function disableUI(disabled){
 }
 
 function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  }[c]));
+  return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
-
-async function writeText(s){
-  await writer.write(enc.encode(s));
-}
-
-/* ===========================
-   ✅ Binary-safe serial helpers
-   =========================== */
 
 function rxAppend(chunk){
   const b = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
@@ -64,49 +54,30 @@ function rxAppend(chunk){
   rx = out;
 }
 
-async function readMore(timeoutMs=12000){
-  const start = Date.now();
-  while(rx.length === 0){
-    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for ESP32");
-    const { value, done } = await reader.read();
-    if(done) throw new Error("Serial closed");
-    rxAppend(value);
-  }
-}
-
 async function readLine(timeoutMs=12000){
   const start = Date.now();
   while(true){
-    // find LF
     for(let i=0;i<rx.length;i++){
-      if(rx[i] === 10){ // '\n'
-        let lineBytes = rx.slice(0, i);     // exclude '\n'
+      if(rx[i] === 10){ // \n
+        let lineBytes = rx.slice(0, i);
         rx = rx.slice(i+1);
-
-        // trim CR
-        if(lineBytes.length && lineBytes[lineBytes.length-1] === 13) {
-          lineBytes = lineBytes.slice(0, -1);
-        }
-
-        const line = dec.decode(lineBytes).trim();
-        return line;
+        if(lineBytes.length && lineBytes[lineBytes.length-1] === 13) lineBytes = lineBytes.slice(0,-1);
+        return dec.decode(lineBytes).trim();
       }
     }
-
-    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for line");
-    const { value, done } = await reader.read();
+    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for line");
+    const {value, done} = await reader.read();
     if(done) throw new Error("Serial closed");
     rxAppend(value);
   }
 }
 
-async function readBytesExact(n, timeoutMs=25000){
+async function readBytesExact(n, timeoutMs=30000){
   const start = Date.now();
   const out = new Uint8Array(n);
   let off = 0;
 
   while(off < n){
-    // take from rx first
     if(rx.length){
       const take = Math.min(rx.length, n - off);
       out.set(rx.slice(0, take), off);
@@ -114,56 +85,25 @@ async function readBytesExact(n, timeoutMs=25000){
       off += take;
       continue;
     }
-
-    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for bytes");
-    const { value, done } = await reader.read();
+    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for bytes");
+    const {value, done} = await reader.read();
     if(done) throw new Error("Serial closed");
     rxAppend(value);
   }
-
   return out;
 }
 
-/* ===========================
-   ✅ Device GET for previews
-   =========================== */
-
-async function getGifFromDevice(name){
-  log("TX: GET " + name);
-  await writeText(`GET ${name}\n`);
-
-  const sizeLine = await readLine(15000); // SIZE N
-  log("RX: " + sizeLine);
-  if(!sizeLine.startsWith("SIZE ")) throw new Error("Bad GET response: " + sizeLine);
-
-  const size = parseInt(sizeLine.slice(5), 10);
-  if(!Number.isFinite(size) || size <= 0) throw new Error("Bad SIZE: " + sizeLine);
-
-  const bytes = await readBytesExact(size, 30000 + Math.floor(size / 40));
-
-  // after bytes, firmware sends blank line then OK
-  while(true){
-    const line = await readLine(15000);
-    log("RX: " + line);
-    if(line.length === 0) continue;
-    if(line === "OK") break;
-    if(line.startsWith("ERR")) throw new Error(line);
-  }
-
-  return bytes;
+async function writeText(s){
+  await writer.write(enc.encode(s));
 }
-
-/* ===========================
-   Connect / List / Grid
-   =========================== */
 
 async function connect(){
   if(!("serial" in navigator)) throw new Error("WebSerial not supported. Use Chrome/Edge.");
 
-  log("Requesting port...");
+  log("Requesting port…");
   port = await navigator.serial.requestPort();
 
-  log("Opening @115200...");
+  log("Opening @115200…");
   await port.open({ baudRate:115200 });
 
   writer = port.writable.getWriter();
@@ -176,12 +116,11 @@ async function connect(){
   // optional HELLO
   try {
     const hello = await readLine(1200);
-    log("RX: " + hello);
+    log("HELLO? RX: " + hello);
   } catch {
     log("No HELLO line (ok).");
   }
 
-  // don't fail connect if refresh fails
   try { await refreshList(); }
   catch(e){
     log("Refresh failed (still connected): " + (e.message||e));
@@ -189,18 +128,41 @@ async function connect(){
   }
 }
 
+async function getGifFromDevice(name){
+  // keep debug calm
+  log("GET " + name);
+
+  await writeText(`GET ${name}\n`);
+
+  const sizeLine = await readLine(15000); // SIZE n
+  if(!sizeLine.startsWith("SIZE ")) throw new Error("Bad GET response: " + sizeLine);
+
+  const size = parseInt(sizeLine.slice(5), 10);
+  if(!Number.isFinite(size) || size <= 0) throw new Error("Bad SIZE: " + sizeLine);
+
+  // Safety: huge files will take ages to preview
+  const MAX_PREVIEW = 3_000_000; // 3MB
+  if(size > MAX_PREVIEW) throw new Error(`Too big to preview (${size} bytes)`);
+
+  const bytes = await readBytesExact(size, 30000 + Math.floor(size / 40));
+
+  const ok = await readLine(15000);
+  if(ok !== "OK") throw new Error("GET end not OK: " + ok);
+
+  return bytes;
+}
+
 async function refreshList(){
   listEl.innerHTML = "";
   setUpload("Refreshing…");
-  log("TX: LIST");
+  log("LIST");
+
   await writeText("LIST\n");
 
   const fileMap = new Map();
 
   while(true){
     const line = await readLine(15000);
-    log("RX: " + line);
-
     if(line === "BEGIN") continue;
     if(line === "END") break;
 
@@ -220,15 +182,13 @@ async function refreshList(){
     return;
   }
 
-  // build cards first
   const cards = new Map();
+
   for(const f of files){
     const card = document.createElement("div");
     card.className = "gif-card";
     card.innerHTML = `
-      <div class="thumb-wrap">
-        <div class="thumb loading">Loading preview…</div>
-      </div>
+      <div class="thumb-wrap"><div class="thumb loading">Loading preview…</div></div>
       <div class="gif-name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
       <div class="gif-meta">${escapeHtml(f.size)} bytes</div>
       <div class="gif-actions">
@@ -240,14 +200,12 @@ async function refreshList(){
     cards.set(f.name, card);
   }
 
-  // buttons
   listEl.querySelectorAll("[data-play]").forEach(btn=>{
     btn.onclick = async ()=>{
       const name = btn.getAttribute("data-play");
-      log("TX: PLAY " + name);
+      log("PLAY " + name);
       await writeText(`PLAY ${name}\n`);
       const resp = await readLine(8000);
-      log("RX: " + resp);
       if(resp !== "OK") alert("Play failed: " + resp);
     };
   });
@@ -256,10 +214,9 @@ async function refreshList(){
     btn.onclick = async ()=>{
       const name = btn.getAttribute("data-del");
       if(!confirm(`Delete ${name}?`)) return;
-      log("TX: DEL " + name);
+      log("DEL " + name);
       await writeText(`DEL ${name}\n`);
       const resp = await readLine(12000);
-      log("RX: " + resp);
       if(resp === "OK") await refreshList();
       else alert("Delete failed: " + resp);
     };
@@ -271,27 +228,18 @@ async function refreshList(){
     if(!card) continue;
 
     try{
-      setUpload(`Preview: ${f.name}`);
+      setUpload(`Previewing ${f.name}…`);
       const bytes = await getGifFromDevice(f.name);
-
       const blob = new Blob([bytes], { type: "image/gif" });
       const url = URL.createObjectURL(blob);
-
-      const wrap = card.querySelector(".thumb-wrap");
-      wrap.innerHTML = `<img class="thumb-img" src="${url}" alt="${escapeAttr(f.name)}">`;
+      card.querySelector(".thumb-wrap").innerHTML = `<img class="thumb-img" src="${url}" alt="${escapeAttr(f.name)}">`;
     }catch(e){
-      console.error(e);
-      const wrap = card.querySelector(".thumb-wrap");
-      wrap.innerHTML = `<div class="thumb error">No preview</div>`;
+      card.querySelector(".thumb-wrap").innerHTML = `<div class="thumb error">${escapeHtml(e.message || "No preview")}</div>`;
     }
   }
 
   setUpload("Ready ✅","good");
 }
-
-/* ===========================
-   Upload (same protocol)
-   =========================== */
 
 async function uploadReliable(){
   const file = fileInput.files?.[0];
@@ -301,11 +249,10 @@ async function uploadReliable(){
   const bytes = new Uint8Array(await file.arrayBuffer());
 
   setUpload(`Sending header… (${bytes.length} bytes)`);
-  log(`TX: UPLOAD2 ${safeName} ${bytes.length}`);
+  log(`UPLOAD2 ${safeName} ${bytes.length}`);
   await writeText(`UPLOAD2 ${safeName} ${bytes.length}\n`);
 
   const ready = await readLine(15000);
-  log("RX: " + ready);
   if(ready !== "READY"){ setUpload("Device refused: " + ready,"bad"); return; }
 
   await new Promise(r=>setTimeout(r, 20));
@@ -320,15 +267,11 @@ async function uploadReliable(){
     sent += len;
 
     const ack = await readLine(15000);
-    log("RX: " + ack);
     if(!ack.startsWith("ACK ")){ setUpload("Upload failed: " + ack,"bad"); return; }
-
     setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
   }
 
   const done = await readLine(15000);
-  log("RX: " + done);
-
   if(done === "OK"){
     setUpload("Upload complete ✅","good");
     await refreshList();
@@ -337,25 +280,11 @@ async function uploadReliable(){
   }
 }
 
-/* ===========================
-   Init + Events
-   =========================== */
-
+// init
 disableUI(true);
 setStatus("Not connected","warn");
 setUpload("Uploads go to /gifs");
 
-connectBtn.onclick = async ()=>{
-  try { await connect(); }
-  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setStatus("Connect failed","bad"); }
-};
-
-refreshBtn.onclick = async ()=>{
-  try { await refreshList(); }
-  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
-};
-
-uploadBtn.onclick = async ()=>{
-  try { await uploadReliable(); }
-  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
-};
+connectBtn.onclick = async ()=>{ try { await connect(); } catch(e){ log("ERROR: " + (e.message||e)); setStatus("Connect failed","bad"); } };
+refreshBtn.onclick = async ()=>{ try { await refreshList(); } catch(e){ log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); } };
+uploadBtn.onclick  = async ()=>{ try { await uploadReliable(); } catch(e){ log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); } };
