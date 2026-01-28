@@ -5,13 +5,12 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Maddmann’s GIF Player</title>
   <link rel="stylesheet" href="style.css"/>
-
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
   <header>
     <h1>Maddmann’s GIF Player</h1>
-    <p>Flash firmware • Connect • Upload • Preview SD • Play</p>
+    <p>Flash firmware • Connect • Upload • SD previews</p>
   </header>
 
   <main class="card">
@@ -38,7 +37,7 @@
     <div id="uploadStatus" class="hint">Uploads go to /gifs</div>
 
     <h2>SD Card /gifs (preview grid)</h2>
-    <div class="hint">Previews are downloaded from the ESP32 over serial (GET).</div>
+    <div class="hint">Full previews are fetched from SD using GET.</div>
     <div id="list" class="list"></div>
 
     <pre id="debug" class="debug">Debug:
