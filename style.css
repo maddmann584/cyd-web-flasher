@@ -22,11 +22,12 @@ p { margin:8px 0 0; color:#a8a8b3; }
 
 button { padding:10px 14px; border-radius:10px; border:0; background:#2b2b33; color:#eaeaea; cursor:pointer; }
 button:disabled { opacity:.5; cursor:not-allowed; }
+
 #status { color:#ffaa00; }
 .hint { text-align:center; color:#a8a8b3; font-size:12px; }
-
 .sep { border:0; height:1px; background:#2a2a33; margin:14px 0; }
 
+/* ✅ GRID */
 .list{
   margin-top:10px;
   display:grid;
@@ -90,6 +91,12 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 .del  { background:#4a2020; }
 
 .debug {
-  margin-top:12px; background:#101014; border:1px solid #2a2a33; border-radius:12px;
-  padding:10px; max-height:220px; overflow:auto; white-space:pre-wrap;
+  margin-top:12px;
+  background:#101014;
+  border:1px solid #2a2a33;
+  border-radius:12px;
+  padding:10px;
+  max-height:220px;
+  overflow:auto;
+  white-space:pre-wrap;
 }
