@@ -10,7 +10,9 @@ const debugEl = document.getElementById("debug");
 let port = null, reader = null, writer = null;
 const dec = new TextDecoder();
 const enc = new TextEncoder();
-let rxBuf = "";
+
+// ✅ BYTE BUFFER (binary-safe)
+let rx = new Uint8Array(0);
 
 function log(msg){
   debugEl.textContent += msg + "\n";
@@ -46,49 +48,85 @@ function escapeHtml(s){
 }
 function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
 
-async function readLine(timeoutMs=12000){
-  const start = Date.now();
-  while(true){
-    const idx = rxBuf.indexOf("\n");
-    if(idx >= 0){
-      const line = rxBuf.slice(0, idx).replace("\r","").trim();
-      rxBuf = rxBuf.slice(idx+1);
-      return line;
-    }
-    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for ESP32");
-    const {value, done} = await reader.read();
-    if(done) throw new Error("Serial closed");
-    rxBuf += dec.decode(value);
-  }
-}
-
 async function writeText(s){
   await writer.write(enc.encode(s));
 }
 
-/* ---- binary helpers for GET preview ---- */
+/* ===========================
+   ✅ Binary-safe serial helpers
+   =========================== */
+
+function rxAppend(chunk){
+  const b = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+  const out = new Uint8Array(rx.length + b.length);
+  out.set(rx, 0);
+  out.set(b, rx.length);
+  rx = out;
+}
+
+async function readMore(timeoutMs=12000){
+  const start = Date.now();
+  while(rx.length === 0){
+    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for ESP32");
+    const { value, done } = await reader.read();
+    if(done) throw new Error("Serial closed");
+    rxAppend(value);
+  }
+}
+
+async function readLine(timeoutMs=12000){
+  const start = Date.now();
+  while(true){
+    // find LF
+    for(let i=0;i<rx.length;i++){
+      if(rx[i] === 10){ // '\n'
+        let lineBytes = rx.slice(0, i);     // exclude '\n'
+        rx = rx.slice(i+1);
+
+        // trim CR
+        if(lineBytes.length && lineBytes[lineBytes.length-1] === 13) {
+          lineBytes = lineBytes.slice(0, -1);
+        }
+
+        const line = dec.decode(lineBytes).trim();
+        return line;
+      }
+    }
+
+    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for line");
+    const { value, done } = await reader.read();
+    if(done) throw new Error("Serial closed");
+    rxAppend(value);
+  }
+}
+
 async function readBytesExact(n, timeoutMs=25000){
   const start = Date.now();
   const out = new Uint8Array(n);
   let off = 0;
 
   while(off < n){
-    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for file bytes");
+    // take from rx first
+    if(rx.length){
+      const take = Math.min(rx.length, n - off);
+      out.set(rx.slice(0, take), off);
+      rx = rx.slice(take);
+      off += take;
+      continue;
+    }
+
+    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for bytes");
     const { value, done } = await reader.read();
     if(done) throw new Error("Serial closed");
-
-    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
-    const take = Math.min(chunk.length, n - off);
-    out.set(chunk.slice(0, take), off);
-    off += take;
-
-    // push back extra bytes as text (rare but possible)
-    if(take < chunk.length){
-      rxBuf = dec.decode(chunk.slice(take)) + rxBuf;
-    }
+    rxAppend(value);
   }
+
   return out;
 }
+
+/* ===========================
+   ✅ Device GET for previews
+   =========================== */
 
 async function getGifFromDevice(name){
   log("TX: GET " + name);
@@ -103,7 +141,7 @@ async function getGifFromDevice(name){
 
   const bytes = await readBytesExact(size, 30000 + Math.floor(size / 40));
 
-  // Firmware prints blank line then OK (consume until OK)
+  // after bytes, firmware sends blank line then OK
   while(true){
     const line = await readLine(15000);
     log("RX: " + line);
@@ -111,10 +149,14 @@ async function getGifFromDevice(name){
     if(line === "OK") break;
     if(line.startsWith("ERR")) throw new Error(line);
   }
+
   return bytes;
 }
 
-/* ---- connect ---- */
+/* ===========================
+   Connect / List / Grid
+   =========================== */
+
 async function connect(){
   if(!("serial" in navigator)) throw new Error("WebSerial not supported. Use Chrome/Edge.");
 
@@ -126,30 +168,34 @@ async function connect(){
 
   writer = port.writable.getWriter();
   reader = port.readable.getReader();
-  rxBuf = "";
+  rx = new Uint8Array(0);
 
   setStatus("Connected ✅","good");
   disableUI(false);
 
-  // optional hello line
+  // optional HELLO
   try {
-    const hello = await readLine(1500);
+    const hello = await readLine(1200);
     log("RX: " + hello);
   } catch {
     log("No HELLO line (ok).");
   }
 
-  await refreshList();
+  // don't fail connect if refresh fails
+  try { await refreshList(); }
+  catch(e){
+    log("Refresh failed (still connected): " + (e.message||e));
+    setUpload("Connected, but refresh failed. Click Refresh.", "warn");
+  }
 }
 
-/* ---- list + grid + preview ---- */
 async function refreshList(){
   listEl.innerHTML = "";
-  setUpload("Refreshing list…");
+  setUpload("Refreshing…");
   log("TX: LIST");
   await writeText("LIST\n");
 
-  const fileMap = new Map(); // de-dupe by name
+  const fileMap = new Map();
 
   while(true){
     const line = await readLine(15000);
@@ -174,7 +220,7 @@ async function refreshList(){
     return;
   }
 
-  // render cards first
+  // build cards first
   const cards = new Map();
   for(const f of files){
     const card = document.createElement("div");
@@ -187,14 +233,14 @@ async function refreshList(){
       <div class="gif-meta">${escapeHtml(f.size)} bytes</div>
       <div class="gif-actions">
         <button class="play" data-play="${escapeAttr(f.name)}">Play</button>
-        <button class="del"  data-del="${escapeAttr(f.name)}">Delete</button>
+        <button class="del" data-del="${escapeAttr(f.name)}">Delete</button>
       </div>
     `;
     listEl.appendChild(card);
     cards.set(f.name, card);
   }
 
-  // hook buttons
+  // buttons
   listEl.querySelectorAll("[data-play]").forEach(btn=>{
     btn.onclick = async ()=>{
       const name = btn.getAttribute("data-play");
@@ -219,14 +265,15 @@ async function refreshList(){
     };
   });
 
-  // previews (one-by-one)
+  // previews one-by-one
   for(const f of files){
     const card = cards.get(f.name);
     if(!card) continue;
 
     try{
-      setUpload(`Downloading preview… ${f.name}`);
+      setUpload(`Preview: ${f.name}`);
       const bytes = await getGifFromDevice(f.name);
+
       const blob = new Blob([bytes], { type: "image/gif" });
       const url = URL.createObjectURL(blob);
 
@@ -242,7 +289,10 @@ async function refreshList(){
   setUpload("Ready ✅","good");
 }
 
-/* ---- upload ---- */
+/* ===========================
+   Upload (same protocol)
+   =========================== */
+
 async function uploadReliable(){
   const file = fileInput.files?.[0];
   if(!file){ setUpload("Pick a GIF first","bad"); return; }
@@ -265,7 +315,6 @@ async function uploadReliable(){
 
   while(sent < bytes.length){
     const len = Math.min(CHUNK, bytes.length - sent);
-
     await writeText(`C ${len}\n`);
     await writer.write(bytes.slice(sent, sent + len));
     sent += len;
@@ -288,7 +337,10 @@ async function uploadReliable(){
   }
 }
 
-/* ---- init + events ---- */
+/* ===========================
+   Init + Events
+   =========================== */
+
 disableUI(true);
 setStatus("Not connected","warn");
 setUpload("Uploads go to /gifs");
