@@ -6,12 +6,13 @@
   <title>Maddmann’s GIF Player</title>
   <link rel="stylesheet" href="style.css"/>
 
+  <!-- ESP Web Tools (Flashing) -->
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
 </head>
 <body>
   <header>
     <h1>Maddmann’s GIF Player</h1>
-    <p>Flash firmware • Connect • Upload • SD previews (full GIF)</p>
+    <p>Flash firmware • Connect • Upload • Click a GIF to play</p>
   </header>
 
   <main class="card">
@@ -31,14 +32,13 @@
 
     <div class="row">
       <input id="fileInput" type="file" accept=".gif,image/gif"/>
-      <button id="uploadBtn" disabled>Upload to SD</button>
+      <button id="uploadBtn" disabled>Upload to /gifs</button>
       <button id="refreshBtn" disabled>Refresh</button>
     </div>
 
     <div id="uploadStatus" class="hint">Uploads go to /gifs</div>
 
-    <h2>SD Card /gifs</h2>
-    <div class="hint">Previews are downloaded from SD over serial (GET). Big GIFs can take time.</div>
+    <h2>/gifs</h2>
     <div id="list" class="list"></div>
 
     <pre id="debug" class="debug">Debug:
