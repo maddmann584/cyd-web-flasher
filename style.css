@@ -4,7 +4,7 @@ h1 { margin:0; color:#00ff88; }
 p { margin:8px 0 0; color:#a8a8b3; }
 
 .card {
-  width: min(980px, calc(100% - 24px));
+  width: min(900px, calc(100% - 24px));
   margin: 0 auto 24px;
   background:#1b1b1f;
   padding:16px;
@@ -22,9 +22,9 @@ p { margin:8px 0 0; color:#a8a8b3; }
 
 button { padding:10px 14px; border-radius:10px; border:0; background:#2b2b33; color:#eaeaea; cursor:pointer; }
 button:disabled { opacity:.5; cursor:not-allowed; }
-
 #status { color:#ffaa00; }
 .hint { text-align:center; color:#a8a8b3; font-size:12px; }
+
 .sep { border:0; height:1px; background:#2a2a33; margin:14px 0; }
 
 /* ✅ GRID */
@@ -32,9 +32,10 @@ button:disabled { opacity:.5; cursor:not-allowed; }
   margin-top:10px;
   display:grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap:12px;
+  gap:10px;
 }
 
+/* ✅ GRID CARD */
 .gif-card{
   background:#24242a;
   padding:12px;
@@ -42,37 +43,19 @@ button:disabled { opacity:.5; cursor:not-allowed; }
   border:1px solid #2a2a33;
   display:flex;
   flex-direction:column;
-  gap:8px;
+  justify-content:space-between;
+  min-height:110px;
 }
 
-.thumb-wrap{
-  background:#101014;
-  border:1px solid #2a2a33;
-  border-radius:10px;
-  overflow:hidden;
-  height:150px;
+.gif-top{
   display:flex;
-  align-items:center;
-  justify-content:center;
-}
-
-.thumb{
-  font-size:12px;
-  padding:8px;
-  text-align:center;
-}
-.thumb.loading{ color:#ffaa00; }
-.thumb.error{ color:#ff4d4d; }
-
-.thumb-img{
-  width:100%;
-  height:100%;
-  object-fit:contain;
+  flex-direction:column;
+  gap:6px;
 }
 
 .gif-name{
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size:13px;
+  font-size:14px;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
@@ -86,17 +69,13 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 .gif-actions{
   display:flex;
   gap:8px;
+  margin-top:10px;
 }
+
 .play { background:#214733; }
 .del  { background:#4a2020; }
 
 .debug {
-  margin-top:12px;
-  background:#101014;
-  border:1px solid #2a2a33;
-  border-radius:12px;
-  padding:10px;
-  max-height:220px;
-  overflow:auto;
-  white-space:pre-wrap;
+  margin-top:12px; background:#101014; border:1px solid #2a2a33; border-radius:12px;
+  padding:10px; max-height:220px; overflow:auto; white-space:pre-wrap;
 }
