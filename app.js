@@ -72,7 +72,7 @@ async function readLine(timeoutMs=12000){
   }
 }
 
-async function readBytesExact(n, timeoutMs=30000){
+async function readBytesExact(n, onProgress, timeoutMs=180000){
   const start = Date.now();
   const out = new Uint8Array(n);
   let off = 0;
@@ -83,6 +83,7 @@ async function readBytesExact(n, timeoutMs=30000){
       out.set(rx.slice(0, take), off);
       rx = rx.slice(take);
       off += take;
+      if(onProgress) onProgress(off, n);
       continue;
     }
     if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for bytes");
@@ -90,6 +91,7 @@ async function readBytesExact(n, timeoutMs=30000){
     if(done) throw new Error("Serial closed");
     rxAppend(value);
   }
+
   return out;
 }
 
@@ -116,7 +118,7 @@ async function connect(){
   // optional HELLO
   try {
     const hello = await readLine(1200);
-    log("HELLO? RX: " + hello);
+    log("HELLO? " + hello);
   } catch {
     log("No HELLO line (ok).");
   }
@@ -128,26 +130,24 @@ async function connect(){
   }
 }
 
-async function getGifFromDevice(name){
+async function getGifFromDevice(name, progressCb){
   // keep debug calm
   log("GET " + name);
-
   await writeText(`GET ${name}\n`);
 
-  const sizeLine = await readLine(15000); // SIZE n
-  if(!sizeLine.startsWith("SIZE ")) throw new Error("Bad GET response: " + sizeLine);
+  const sizeLine = await readLine(20000); // SIZE n
+  if(!sizeLine.startsWith("SIZE ")) throw new Error("Bad GET: " + sizeLine);
 
   const size = parseInt(sizeLine.slice(5), 10);
   if(!Number.isFinite(size) || size <= 0) throw new Error("Bad SIZE: " + sizeLine);
 
-  // Safety: huge files will take ages to preview
-  const MAX_PREVIEW = 3_000_000; // 3MB
-  if(size > MAX_PREVIEW) throw new Error(`Too big to preview (${size} bytes)`);
+  // timeout scales with size (2MB can take a while)
+  const timeoutMs = 180000 + Math.floor(size / 8); // ~3min + scaling
 
-  const bytes = await readBytesExact(size, 30000 + Math.floor(size / 40));
+  const bytes = await readBytesExact(size, progressCb, timeoutMs);
 
-  const ok = await readLine(15000);
-  if(ok !== "OK") throw new Error("GET end not OK: " + ok);
+  const endLine = await readLine(20000);
+  if(endLine !== "OK") throw new Error("GET end: " + endLine);
 
   return bytes;
 }
@@ -159,10 +159,10 @@ async function refreshList(){
 
   await writeText("LIST\n");
 
-  const fileMap = new Map();
+  const fileMap = new Map(); // ✅ de-dupe
 
   while(true){
-    const line = await readLine(15000);
+    const line = await readLine(20000);
     if(line === "BEGIN") continue;
     if(line === "END") break;
 
@@ -205,7 +205,7 @@ async function refreshList(){
       const name = btn.getAttribute("data-play");
       log("PLAY " + name);
       await writeText(`PLAY ${name}\n`);
-      const resp = await readLine(8000);
+      const resp = await readLine(12000);
       if(resp !== "OK") alert("Play failed: " + resp);
     };
   });
@@ -216,26 +216,36 @@ async function refreshList(){
       if(!confirm(`Delete ${name}?`)) return;
       log("DEL " + name);
       await writeText(`DEL ${name}\n`);
-      const resp = await readLine(12000);
+      const resp = await readLine(20000);
       if(resp === "OK") await refreshList();
       else alert("Delete failed: " + resp);
     };
   });
 
-  // previews one-by-one
+  // ✅ previews sequentially (stable)
   for(const f of files){
     const card = cards.get(f.name);
     if(!card) continue;
 
+    const wrap = card.querySelector(".thumb-wrap");
+    wrap.innerHTML = `<div class="thumb loading">Loading preview…</div>`;
+
     try{
-      setUpload(`Previewing ${f.name}…`);
-      const bytes = await getGifFromDevice(f.name);
-      const blob = new Blob([bytes], { type: "image/gif" });
+      const bytes = await getGifFromDevice(f.name, (done,total)=>{
+        const pct = Math.floor((done/total)*100);
+        wrap.innerHTML = `<div class="thumb loading">Loading… ${pct}%</div>`;
+      });
+
+      const blob = new Blob([bytes], { type:"image/gif" });
       const url = URL.createObjectURL(blob);
-      card.querySelector(".thumb-wrap").innerHTML = `<img class="thumb-img" src="${url}" alt="${escapeAttr(f.name)}">`;
+      wrap.innerHTML = `<img class="thumb-img" src="${url}" alt="${escapeAttr(f.name)}">`;
+
     }catch(e){
-      card.querySelector(".thumb-wrap").innerHTML = `<div class="thumb error">${escapeHtml(e.message || "No preview")}</div>`;
+      wrap.innerHTML = `<div class="thumb error">${escapeHtml(e.message || "No preview")}</div>`;
     }
+
+    // small breather prevents USB/buffer weirdness
+    await new Promise(r=>setTimeout(r, 60));
   }
 
   setUpload("Ready ✅","good");
@@ -252,7 +262,7 @@ async function uploadReliable(){
   log(`UPLOAD2 ${safeName} ${bytes.length}`);
   await writeText(`UPLOAD2 ${safeName} ${bytes.length}\n`);
 
-  const ready = await readLine(15000);
+  const ready = await readLine(20000);
   if(ready !== "READY"){ setUpload("Device refused: " + ready,"bad"); return; }
 
   await new Promise(r=>setTimeout(r, 20));
@@ -266,12 +276,12 @@ async function uploadReliable(){
     await writer.write(bytes.slice(sent, sent + len));
     sent += len;
 
-    const ack = await readLine(15000);
+    const ack = await readLine(20000);
     if(!ack.startsWith("ACK ")){ setUpload("Upload failed: " + ack,"bad"); return; }
     setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
   }
 
-  const done = await readLine(15000);
+  const done = await readLine(20000);
   if(done === "OK"){
     setUpload("Upload complete ✅","good");
     await refreshList();
