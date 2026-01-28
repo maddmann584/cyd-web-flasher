@@ -27,7 +27,6 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 
 .sep { border:0; height:1px; background:#2a2a33; margin:14px 0; }
 
-/* GRID */
 .list{
   margin-top:10px;
   display:grid;
@@ -57,7 +56,6 @@ button:disabled { opacity:.5; cursor:not-allowed; }
 }
 
 .thumb{
-  color:#a8a8b3;
   font-size:12px;
   padding:8px;
   text-align:center;
