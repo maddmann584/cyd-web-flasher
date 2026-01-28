@@ -39,6 +39,13 @@ function disableUI(disabled){
   refreshBtn.disabled = disabled;
 }
 
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
+
 async function readLine(timeoutMs=12000){
   const start = Date.now();
   while(true){
@@ -48,8 +55,8 @@ async function readLine(timeoutMs=12000){
       rxBuf = rxBuf.slice(idx+1);
       return line;
     }
-    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for ESP32");
-    const { value, done } = await reader.read();
+    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for ESP32");
+    const {value, done} = await reader.read();
     if(done) throw new Error("Serial closed");
     rxBuf += dec.decode(value);
   }
@@ -59,16 +66,55 @@ async function writeText(s){
   await writer.write(enc.encode(s));
 }
 
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  }[c]));
+/* ---- binary helpers for GET preview ---- */
+async function readBytesExact(n, timeoutMs=25000){
+  const start = Date.now();
+  const out = new Uint8Array(n);
+  let off = 0;
+
+  while(off < n){
+    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for file bytes");
+    const { value, done } = await reader.read();
+    if(done) throw new Error("Serial closed");
+
+    const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+    const take = Math.min(chunk.length, n - off);
+    out.set(chunk.slice(0, take), off);
+    off += take;
+
+    // push back extra bytes as text (rare but possible)
+    if(take < chunk.length){
+      rxBuf = dec.decode(chunk.slice(take)) + rxBuf;
+    }
+  }
+  return out;
 }
 
-function escapeAttr(s){
-  return String(s).replace(/["<>]/g, "_");
+async function getGifFromDevice(name){
+  log("TX: GET " + name);
+  await writeText(`GET ${name}\n`);
+
+  const sizeLine = await readLine(15000); // SIZE N
+  log("RX: " + sizeLine);
+  if(!sizeLine.startsWith("SIZE ")) throw new Error("Bad GET response: " + sizeLine);
+
+  const size = parseInt(sizeLine.slice(5), 10);
+  if(!Number.isFinite(size) || size <= 0) throw new Error("Bad SIZE: " + sizeLine);
+
+  const bytes = await readBytesExact(size, 30000 + Math.floor(size / 40));
+
+  // Firmware prints blank line then OK (consume until OK)
+  while(true){
+    const line = await readLine(15000);
+    log("RX: " + line);
+    if(line.length === 0) continue;
+    if(line === "OK") break;
+    if(line.startsWith("ERR")) throw new Error(line);
+  }
+  return bytes;
 }
 
+/* ---- connect ---- */
 async function connect(){
   if(!("serial" in navigator)) throw new Error("WebSerial not supported. Use Chrome/Edge.");
 
@@ -76,16 +122,16 @@ async function connect(){
   port = await navigator.serial.requestPort();
 
   log("Opening @115200...");
-  await port.open({ baudRate: 115200 });
+  await port.open({ baudRate:115200 });
 
   writer = port.writable.getWriter();
   reader = port.readable.getReader();
   rxBuf = "";
 
-  setStatus("Connected ✅", "good");
+  setStatus("Connected ✅","good");
   disableUI(false);
 
-  // optional hello
+  // optional hello line
   try {
     const hello = await readLine(1500);
     log("RX: " + hello);
@@ -96,17 +142,17 @@ async function connect(){
   await refreshList();
 }
 
+/* ---- list + grid + preview ---- */
 async function refreshList(){
   listEl.innerHTML = "";
+  setUpload("Refreshing list…");
   log("TX: LIST");
   await writeText("LIST\n");
 
-  // Use a Map to dedupe by filename (prevents duplicates showing twice)
-  // If the ESP reports the same filename twice, the last one wins.
-  const fileMap = new Map();
+  const fileMap = new Map(); // de-dupe by name
 
   while(true){
-    const line = await readLine();
+    const line = await readLine(15000);
     log("RX: " + line);
 
     if(line === "BEGIN") continue;
@@ -114,69 +160,94 @@ async function refreshList(){
 
     if(line.startsWith("FILE ")){
       const parts = line.split(" ");
-      const name = parts[1] || "";
-      const size = parts[2] || "";
+      const name = (parts[1] || "").trim();
+      const size = (parts[2] || "").trim();
       if(name) fileMap.set(name, { name, size });
     }
   }
 
-  const files = Array.from(fileMap.values())
-    .sort((a,b) => a.name.localeCompare(b.name));
+  const files = Array.from(fileMap.values()).sort((a,b)=>a.name.localeCompare(b.name));
 
   if(files.length === 0){
     listEl.innerHTML = `<div class="hint">No GIFs in /gifs</div>`;
+    setUpload("No files found");
     return;
   }
 
+  // render cards first
+  const cards = new Map();
   for(const f of files){
     const card = document.createElement("div");
     card.className = "gif-card";
     card.innerHTML = `
-      <div class="gif-top">
-        <div class="gif-name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
-        <div class="gif-meta">${escapeHtml(f.size)} bytes</div>
+      <div class="thumb-wrap">
+        <div class="thumb loading">Loading preview…</div>
       </div>
+      <div class="gif-name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
+      <div class="gif-meta">${escapeHtml(f.size)} bytes</div>
       <div class="gif-actions">
         <button class="play" data-play="${escapeAttr(f.name)}">Play</button>
-        <button class="del" data-del="${escapeAttr(f.name)}">Delete</button>
+        <button class="del"  data-del="${escapeAttr(f.name)}">Delete</button>
       </div>
     `;
     listEl.appendChild(card);
+    cards.set(f.name, card);
   }
 
-  listEl.querySelectorAll("[data-play]").forEach(btn => {
-    btn.onclick = async () => {
+  // hook buttons
+  listEl.querySelectorAll("[data-play]").forEach(btn=>{
+    btn.onclick = async ()=>{
       const name = btn.getAttribute("data-play");
       log("TX: PLAY " + name);
       await writeText(`PLAY ${name}\n`);
-      const resp = await readLine();
+      const resp = await readLine(8000);
       log("RX: " + resp);
       if(resp !== "OK") alert("Play failed: " + resp);
     };
   });
 
-  listEl.querySelectorAll("[data-del]").forEach(btn => {
-    btn.onclick = async () => {
+  listEl.querySelectorAll("[data-del]").forEach(btn=>{
+    btn.onclick = async ()=>{
       const name = btn.getAttribute("data-del");
       if(!confirm(`Delete ${name}?`)) return;
       log("TX: DEL " + name);
       await writeText(`DEL ${name}\n`);
-      const resp = await readLine();
+      const resp = await readLine(12000);
       log("RX: " + resp);
       if(resp === "OK") await refreshList();
       else alert("Delete failed: " + resp);
     };
   });
-}
 
-async function uploadReliable(){
-  const file = fileInput.files?.[0];
-  if(!file){
-    setUpload("Pick a GIF first", "bad");
-    return;
+  // previews (one-by-one)
+  for(const f of files){
+    const card = cards.get(f.name);
+    if(!card) continue;
+
+    try{
+      setUpload(`Downloading preview… ${f.name}`);
+      const bytes = await getGifFromDevice(f.name);
+      const blob = new Blob([bytes], { type: "image/gif" });
+      const url = URL.createObjectURL(blob);
+
+      const wrap = card.querySelector(".thumb-wrap");
+      wrap.innerHTML = `<img class="thumb-img" src="${url}" alt="${escapeAttr(f.name)}">`;
+    }catch(e){
+      console.error(e);
+      const wrap = card.querySelector(".thumb-wrap");
+      wrap.innerHTML = `<div class="thumb error">No preview</div>`;
+    }
   }
 
-  const safeName = file.name.replace(/[^\w.\-]/g, "_");
+  setUpload("Ready ✅","good");
+}
+
+/* ---- upload ---- */
+async function uploadReliable(){
+  const file = fileInput.files?.[0];
+  if(!file){ setUpload("Pick a GIF first","bad"); return; }
+
+  const safeName = file.name.replace(/[^\w.\-]/g,"_");
   const bytes = new Uint8Array(await file.arrayBuffer());
 
   setUpload(`Sending header… (${bytes.length} bytes)`);
@@ -185,12 +256,9 @@ async function uploadReliable(){
 
   const ready = await readLine(15000);
   log("RX: " + ready);
-  if(ready !== "READY"){
-    setUpload("Device refused: " + ready, "bad");
-    return;
-  }
+  if(ready !== "READY"){ setUpload("Device refused: " + ready,"bad"); return; }
 
-  await new Promise(r => setTimeout(r, 20));
+  await new Promise(r=>setTimeout(r, 20));
 
   const CHUNK = 1024;
   let sent = 0;
@@ -204,10 +272,7 @@ async function uploadReliable(){
 
     const ack = await readLine(15000);
     log("RX: " + ack);
-    if(!ack.startsWith("ACK ")){
-      setUpload("Upload failed: " + ack, "bad");
-      return;
-    }
+    if(!ack.startsWith("ACK ")){ setUpload("Upload failed: " + ack,"bad"); return; }
 
     setUpload(`Uploading… ${Math.floor((sent/bytes.length)*100)}%`);
   }
@@ -216,41 +281,29 @@ async function uploadReliable(){
   log("RX: " + done);
 
   if(done === "OK"){
-    setUpload("Upload complete ✅", "good");
+    setUpload("Upload complete ✅","good");
     await refreshList();
   } else {
-    setUpload("Upload failed: " + done, "bad");
+    setUpload("Upload failed: " + done,"bad");
   }
 }
 
-// init
+/* ---- init + events ---- */
 disableUI(true);
-setStatus("Not connected", "warn");
+setStatus("Not connected","warn");
 setUpload("Uploads go to /gifs");
 
-connectBtn.onclick = async () => {
+connectBtn.onclick = async ()=>{
   try { await connect(); }
-  catch(e){
-    console.error(e);
-    log("ERROR: " + (e.message || e));
-    setStatus("Connect failed", "bad");
-  }
+  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setStatus("Connect failed","bad"); }
 };
 
-refreshBtn.onclick = async () => {
+refreshBtn.onclick = async ()=>{
   try { await refreshList(); }
-  catch(e){
-    console.error(e);
-    log("ERROR: " + (e.message || e));
-    alert(e.message || String(e));
-  }
+  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
 };
 
-uploadBtn.onclick = async () => {
+uploadBtn.onclick = async ()=>{
   try { await uploadReliable(); }
-  catch(e){
-    console.error(e);
-    log("ERROR: " + (e.message || e));
-    setUpload(e.message || String(e), "bad");
-  }
+  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
 };
