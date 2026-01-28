@@ -1,3 +1,9 @@
+// app.js — Maddmann GIF Player (WebSerial)
+// ✅ Stable refresh (no double-refresh crashes)
+// ✅ De-dupe files (no duplicates in UI)
+// ✅ Grid previews (full GIF via GET from SD)
+// ✅ Quiet debug (no spam storms)
+
 const connectBtn = document.getElementById("connectBtn");
 const statusEl   = document.getElementById("status");
 const fileInput  = document.getElementById("fileInput");
@@ -11,8 +17,12 @@ let port=null, reader=null, writer=null;
 const dec = new TextDecoder();
 const enc = new TextEncoder();
 
-// ✅ binary-safe buffer
+// Binary-safe RX buffer
 let rx = new Uint8Array(0);
+
+// Refresh guards
+let refreshBusy = false;
+let refreshToken = 0;
 
 function log(msg){
   debugEl.textContent += msg + "\n";
@@ -42,10 +52,13 @@ function disableUI(disabled){
 }
 
 function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
 }
 function escapeAttr(s){ return String(s).replace(/["<>]/g,"_"); }
 
+// ---------------- Serial helpers ----------------
 function rxAppend(chunk){
   const b = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
   const out = new Uint8Array(rx.length + b.length);
@@ -57,16 +70,21 @@ function rxAppend(chunk){
 async function readLine(timeoutMs=12000){
   const start = Date.now();
   while(true){
+    // find LF
     for(let i=0;i<rx.length;i++){
       if(rx[i] === 10){ // \n
         let lineBytes = rx.slice(0, i);
         rx = rx.slice(i+1);
-        if(lineBytes.length && lineBytes[lineBytes.length-1] === 13) lineBytes = lineBytes.slice(0,-1);
+        // trim CR
+        if(lineBytes.length && lineBytes[lineBytes.length-1] === 13){
+          lineBytes = lineBytes.slice(0, -1);
+        }
         return dec.decode(lineBytes).trim();
       }
     }
-    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for line");
-    const {value, done} = await reader.read();
+
+    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for line");
+    const { value, done } = await reader.read();
     if(done) throw new Error("Serial closed");
     rxAppend(value);
   }
@@ -86,8 +104,9 @@ async function readBytesExact(n, onProgress, timeoutMs=180000){
       if(onProgress) onProgress(off, n);
       continue;
     }
-    if(Date.now()-start > timeoutMs) throw new Error("Timeout waiting for bytes");
-    const {value, done} = await reader.read();
+
+    if(Date.now() - start > timeoutMs) throw new Error("Timeout waiting for bytes");
+    const { value, done } = await reader.read();
     if(done) throw new Error("Serial closed");
     rxAppend(value);
   }
@@ -99,6 +118,7 @@ async function writeText(s){
   await writer.write(enc.encode(s));
 }
 
+// ---------------- Connect ----------------
 async function connect(){
   if(!("serial" in navigator)) throw new Error("WebSerial not supported. Use Chrome/Edge.");
 
@@ -115,23 +135,20 @@ async function connect(){
   setStatus("Connected ✅","good");
   disableUI(false);
 
-  // optional HELLO
-  try {
+  // Optional HELLO (don't fail if missing)
+  try{
     const hello = await readLine(1200);
     log("HELLO? " + hello);
   } catch {
     log("No HELLO line (ok).");
   }
 
-  try { await refreshList(); }
-  catch(e){
-    log("Refresh failed (still connected): " + (e.message||e));
-    setUpload("Connected, but refresh failed. Click Refresh.", "warn");
-  }
+  // Start one refresh
+  await refreshList();
 }
 
+// ---------------- Protocol: GET (full GIF) ----------------
 async function getGifFromDevice(name, progressCb){
-  // keep debug calm
   log("GET " + name);
   await writeText(`GET ${name}\n`);
 
@@ -141,8 +158,8 @@ async function getGifFromDevice(name, progressCb){
   const size = parseInt(sizeLine.slice(5), 10);
   if(!Number.isFinite(size) || size <= 0) throw new Error("Bad SIZE: " + sizeLine);
 
-  // timeout scales with size (2MB can take a while)
-  const timeoutMs = 180000 + Math.floor(size / 8); // ~3min + scaling
+  // Timeout scales with size (115200 can be slow)
+  const timeoutMs = 180000 + Math.floor(size / 8);
 
   const bytes = await readBytesExact(size, progressCb, timeoutMs);
 
@@ -152,105 +169,133 @@ async function getGifFromDevice(name, progressCb){
   return bytes;
 }
 
+// ---------------- LIST + grid rendering ----------------
 async function refreshList(){
-  listEl.innerHTML = "";
-  setUpload("Refreshing…");
-  log("LIST");
+  // cancel any older refresh
+  const myToken = ++refreshToken;
 
-  await writeText("LIST\n");
-
-  const fileMap = new Map(); // ✅ de-dupe
-
-  while(true){
-    const line = await readLine(20000);
-    if(line === "BEGIN") continue;
-    if(line === "END") break;
-
-    if(line.startsWith("FILE ")){
-      const parts = line.split(" ");
-      const name = (parts[1] || "").trim();
-      const size = (parts[2] || "").trim();
-      if(name) fileMap.set(name, { name, size });
-    }
-  }
-
-  const files = Array.from(fileMap.values()).sort((a,b)=>a.name.localeCompare(b.name));
-
-  if(files.length === 0){
-    listEl.innerHTML = `<div class="hint">No GIFs in /gifs</div>`;
-    setUpload("No files found");
+  if(refreshBusy){
+    log("Refresh ignored (already running)");
     return;
   }
+  refreshBusy = true;
 
-  const cards = new Map();
+  // lock UI during refresh
+  refreshBtn.disabled = true;
+  uploadBtn.disabled = true;
 
-  for(const f of files){
-    const card = document.createElement("div");
-    card.className = "gif-card";
-    card.innerHTML = `
-      <div class="thumb-wrap"><div class="thumb loading">Loading preview…</div></div>
-      <div class="gif-name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
-      <div class="gif-meta">${escapeHtml(f.size)} bytes</div>
-      <div class="gif-actions">
-        <button class="play" data-play="${escapeAttr(f.name)}">Play</button>
-        <button class="del" data-del="${escapeAttr(f.name)}">Delete</button>
-      </div>
-    `;
-    listEl.appendChild(card);
-    cards.set(f.name, card);
-  }
+  try{
+    listEl.innerHTML = "";
+    setUpload("Refreshing…");
 
-  listEl.querySelectorAll("[data-play]").forEach(btn=>{
-    btn.onclick = async ()=>{
-      const name = btn.getAttribute("data-play");
-      log("PLAY " + name);
-      await writeText(`PLAY ${name}\n`);
-      const resp = await readLine(12000);
-      if(resp !== "OK") alert("Play failed: " + resp);
-    };
-  });
+    log("LIST");
+    await writeText("LIST\n");
 
-  listEl.querySelectorAll("[data-del]").forEach(btn=>{
-    btn.onclick = async ()=>{
-      const name = btn.getAttribute("data-del");
-      if(!confirm(`Delete ${name}?`)) return;
-      log("DEL " + name);
-      await writeText(`DEL ${name}\n`);
-      const resp = await readLine(20000);
-      if(resp === "OK") await refreshList();
-      else alert("Delete failed: " + resp);
-    };
-  });
+    const fileMap = new Map(); // ✅ de-dupe
+    while(true){
+      if(myToken !== refreshToken) return;
 
-  // ✅ previews sequentially (stable)
-  for(const f of files){
-    const card = cards.get(f.name);
-    if(!card) continue;
+      const line = await readLine(20000);
+      if(line === "BEGIN") continue;
+      if(line === "END") break;
 
-    const wrap = card.querySelector(".thumb-wrap");
-    wrap.innerHTML = `<div class="thumb loading">Loading preview…</div>`;
-
-    try{
-      const bytes = await getGifFromDevice(f.name, (done,total)=>{
-        const pct = Math.floor((done/total)*100);
-        wrap.innerHTML = `<div class="thumb loading">Loading… ${pct}%</div>`;
-      });
-
-      const blob = new Blob([bytes], { type:"image/gif" });
-      const url = URL.createObjectURL(blob);
-      wrap.innerHTML = `<img class="thumb-img" src="${url}" alt="${escapeAttr(f.name)}">`;
-
-    }catch(e){
-      wrap.innerHTML = `<div class="thumb error">${escapeHtml(e.message || "No preview")}</div>`;
+      if(line.startsWith("FILE ")){
+        const parts = line.split(" ");
+        const name = (parts[1] || "").trim();
+        const size = (parts[2] || "").trim();
+        if(name) fileMap.set(name, { name, size });
+      }
     }
 
-    // small breather prevents USB/buffer weirdness
-    await new Promise(r=>setTimeout(r, 60));
-  }
+    if(myToken !== refreshToken) return;
 
-  setUpload("Ready ✅","good");
+    const files = Array.from(fileMap.values()).sort((a,b)=>a.name.localeCompare(b.name));
+    if(files.length === 0){
+      listEl.innerHTML = `<div class="hint">No GIFs in /gifs</div>`;
+      setUpload("No files found");
+      return;
+    }
+
+    // Render cards
+    const cards = new Map();
+    for(const f of files){
+      const card = document.createElement("div");
+      card.className = "gif-card";
+      card.innerHTML = `
+        <div class="thumb-wrap"><div class="thumb loading">Loading preview…</div></div>
+        <div class="gif-name" title="${escapeAttr(f.name)}">${escapeHtml(f.name)}</div>
+        <div class="gif-meta">${escapeHtml(f.size)} bytes</div>
+        <div class="gif-actions">
+          <button class="play" data-play="${escapeAttr(f.name)}">Play</button>
+          <button class="del" data-del="${escapeAttr(f.name)}">Delete</button>
+        </div>
+      `;
+      listEl.appendChild(card);
+      cards.set(f.name, card);
+    }
+
+    // Wire buttons
+    listEl.querySelectorAll("[data-play]").forEach(btn=>{
+      btn.onclick = async ()=>{
+        const name = btn.getAttribute("data-play");
+        log("PLAY " + name);
+        await writeText(`PLAY ${name}\n`);
+        const resp = await readLine(12000);
+        if(resp !== "OK") alert("Play failed: " + resp);
+      };
+    });
+
+    listEl.querySelectorAll("[data-del]").forEach(btn=>{
+      btn.onclick = async ()=>{
+        const name = btn.getAttribute("data-del");
+        if(!confirm(`Delete ${name}?`)) return;
+        log("DEL " + name);
+        await writeText(`DEL ${name}\n`);
+        const resp = await readLine(20000);
+        if(resp === "OK") await refreshList();
+        else alert("Delete failed: " + resp);
+      };
+    });
+
+    // Previews sequentially
+    for(const f of files){
+      if(myToken !== refreshToken) return;
+
+      const card = cards.get(f.name);
+      if(!card) continue;
+
+      const wrap = card.querySelector(".thumb-wrap");
+      wrap.innerHTML = `<div class="thumb loading">Loading preview…</div>`;
+
+      try{
+        const bytes = await getGifFromDevice(f.name, (done,total)=>{
+          if(myToken !== refreshToken) return;
+          const pct = Math.floor((done/total)*100);
+          wrap.innerHTML = `<div class="thumb loading">Loading… ${pct}%</div>`;
+        });
+
+        if(myToken !== refreshToken) return;
+
+        const blob = new Blob([bytes], { type:"image/gif" });
+        const url = URL.createObjectURL(blob);
+        wrap.innerHTML = `<img class="thumb-img" src="${url}" alt="${escapeAttr(f.name)}">`;
+      } catch(e){
+        wrap.innerHTML = `<div class="thumb error">${escapeHtml(e.message || "No preview")}</div>`;
+      }
+
+      // small breather to avoid USB/buffer weirdness
+      await new Promise(r=>setTimeout(r, 60));
+    }
+
+    setUpload("Ready ✅","good");
+  } finally {
+    refreshBusy = false;
+    refreshBtn.disabled = false;
+    uploadBtn.disabled = false;
+  }
 }
 
+// ---------------- UPLOAD2 ----------------
 async function uploadReliable(){
   const file = fileInput.files?.[0];
   if(!file){ setUpload("Pick a GIF first","bad"); return; }
@@ -290,11 +335,23 @@ async function uploadReliable(){
   }
 }
 
-// init
+// ---------------- Init + events ----------------
 disableUI(true);
 setStatus("Not connected","warn");
 setUpload("Uploads go to /gifs");
 
-connectBtn.onclick = async ()=>{ try { await connect(); } catch(e){ log("ERROR: " + (e.message||e)); setStatus("Connect failed","bad"); } };
-refreshBtn.onclick = async ()=>{ try { await refreshList(); } catch(e){ log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); } };
-uploadBtn.onclick  = async ()=>{ try { await uploadReliable(); } catch(e){ log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); } };
+connectBtn.onclick = async ()=>{
+  try { await connect(); }
+  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setStatus("Connect failed","bad"); }
+};
+
+refreshBtn.onclick = async ()=>{
+  if(refreshBusy) return;
+  try { await refreshList(); }
+  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
+};
+
+uploadBtn.onclick = async ()=>{
+  try { await uploadReliable(); }
+  catch(e){ console.error(e); log("ERROR: " + (e.message||e)); setUpload(e.message||String(e),"bad"); }
+};
